@@ -56,12 +56,12 @@ Les tests backend ont besoin d'une base Postgres (`DATABASE_URL`, par défaut ce
 
 ```bash
 cd backend
-python -m scripts.data_spike              # 20 titres par défaut
+python -m scripts.data_spike              # univers par défaut (ETF, grandes valeurs, wheel)
 python -m scripts.data_spike F SOFI AAPL  # titres au choix
 ```
 
-Le script affiche, pour chaque titre, combien de puts passent chaque filtre (DTE 30-50,
-delta 0.15-0.30, open interest, volume, spread, earnings). Il écrit les contrats retenus dans
+Le script affiche, pour chaque titre, combien de puts passent chaque filtre (DTE 25-55,
+delta 0.15-0.30, OI ≥ 100, volume ≥ 10, spread ≤ 15 %, earnings). Il écrit les contrats retenus dans
 `spike_results.csv`. Il n'utilise que la bibliothèque standard Python (aucun `pip install`) et a
 besoin d'un accès réseau à `fc.yahoo.com`, `query1.finance.yahoo.com` et `query2.finance.yahoo.com`.
 Résultats du premier passage : [docs/spike-sprint0.md](docs/spike-sprint0.md).

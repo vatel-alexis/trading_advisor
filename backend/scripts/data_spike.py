@@ -1,10 +1,10 @@
 """Sprint 0 data spike: how many contracts survive each screener filter, per ticker.
 
 Usage (needs network access to Yahoo Finance):
-    python -m scripts.data_spike                # default 20-ticker universe
+    python -m scripts.data_spike                # default universe (ETF, large caps, wheel)
     python -m scripts.data_spike AAPL MSFT F    # custom tickers
 
-It prints a funnel per ticker (puts with 30-50 DTE -> OTM delta band -> liquidity -> spread
+It prints a funnel per ticker (puts with 25-55 DTE -> OTM delta band -> liquidity -> spread
 width -> earnings) and writes the surviving contracts to spike_results.csv. IV Rank is not
 available from Yahoo: the script reports IV / 30-day realized volatility instead.
 
@@ -24,10 +24,18 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
-DEFAULT_UNIVERSE = [
-    "SPY", "QQQ", "IWM", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "NVDA", "AMD",
-    "JPM", "BAC", "XOM", "KO", "PFE", "F", "T", "INTC", "SOFI", "AAL",
+ETFS = ["SPY", "QQQ", "IWM"]  # always screened: tradable during earnings season
+LARGE_CAPS = [
+    "AAPL", "MSFT", "AMZN", "GOOGL", "META", "NVDA", "AMD", "JPM", "BAC", "XOM",
+    "KO", "PFE", "T", "INTC",
 ]  # fmt: skip
+# Wheel candidates: cash-secured puts need strike <= 20 (10 % of a 20k account = 2 000 collateral).
+WHEEL = [
+    "F", "SOFI", "AAL", "RIVN", "NCLH", "VALE", "ITUB", "HBAN", "KEY", "PCG",
+    "CLF", "AGNC", "LYFT", "SNAP", "NIO", "RIG",
+]  # fmt: skip
+WHEEL_MAX_STRIKE = 20.0
+DEFAULT_UNIVERSE = ETFS + LARGE_CAPS + WHEEL
 
 RISK_FREE = 0.04
 USER_AGENT = (
@@ -42,13 +50,13 @@ def norm_cdf(x: float) -> float:
 
 @dataclass(frozen=True)
 class Filters:
-    dte_min: int = 30
-    dte_max: int = 50
+    dte_min: int = 25
+    dte_max: int = 55
     delta_min: float = 0.15
     delta_max: float = 0.30
-    min_open_interest: int = 500
-    min_volume: int = 100
-    max_spread_pct: float = 0.10
+    min_open_interest: int = 100
+    min_volume: int = 10
+    max_spread_pct: float = 0.15
 
 
 def put_delta(spot: float, strike: float, years: float, iv: float, r: float = RISK_FREE) -> float:
@@ -118,7 +126,7 @@ class Yahoo:  # pragma: no cover - network
                 with self.opener.open(url, timeout=20) as resp:
                     return resp.read()
             except urllib.error.HTTPError as exc:
-                if exc.code != 429 or attempt == 3:
+                if (exc.code != 429 and exc.code < 500) or attempt == 3:
                     raise
                 time.sleep(5 * 2**attempt)
         raise RuntimeError("unreachable")
@@ -147,7 +155,7 @@ def _fetch(yahoo: Yahoo, ticker: str, today: date):  # pragma: no cover - networ
     puts: list[dict] = []
     for ts in chain["expirationDates"]:
         expiration = datetime.fromtimestamp(ts, UTC).date()
-        if not 25 <= (expiration - today).days <= 55:
+        if not 20 <= (expiration - today).days <= 60:
             continue
         data = yahoo.json(f"/v7/finance/options/{ticker}", date=ts)["optionChain"]["result"][0]
         for row in data["options"][0]["puts"]:
@@ -180,6 +188,8 @@ def main(tickers: list[str]) -> None:  # pragma: no cover - network
         except Exception as exc:
             print(f"{ticker:<7} erreur: {exc}")
             continue
+        if ticker in WHEEL:
+            puts = [p for p in puts if p["strike"] <= WHEEL_MAX_STRIKE]
         counts, rows = funnel(puts, spot, today, filters, next_earnings)
         atm_iv = min(puts, key=lambda p: abs(p["strike"] - spot))["iv"] if puts else 0
         ratio = atm_iv / hv30 if hv30 else 0

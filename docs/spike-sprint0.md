@@ -1,5 +1,8 @@
 # Spike données Sprint 0 — résultats du 2026-10-03
 
+Les seuils recommandés en fin de document ont été validés par Alexis le 2026-10-03 et sont
+maintenant les valeurs par défaut du script (voir « Après recalibrage »).
+
 Source : Yahoo Finance (cotations de clôture du vendredi 2 octobre 2026), 20 titres, puts uniquement.
 Deux échéances tombent dans la fenêtre 30-50 DTE : 6 et 20 novembre 2026.
 
@@ -85,3 +88,24 @@ Contrats retenus avant le filtre earnings, et titres ayant au moins un contrat :
 - Yahoo ne fournit ni IV Rank, ni grecs, ni historique de chaînes : delta et POP sont recalculés en
   Black-Scholes à partir de l'IV de Yahoo.
 - Données d'un seul jour (vendredi), sans comparaison Alpaca/Tradier faute de clés démo.
+
+## Après recalibrage (seuils validés)
+
+DTE 25-55, delta 0,15-0,30, OI ≥ 100, volume ≥ 10, spread ≤ 15 %, échéance avant les earnings.
+Univers élargi à 33 titres : 3 ETF, 14 grandes valeurs, 16 candidats wheel (puts limités aux
+strikes ≤ 20 $). Trois échéances dans la fenêtre : 30 octobre, 6 et 20 novembre.
+
+| groupe | puts | dte | delta | OI | volume | spread | earnings | titres avec ≥ 1 contrat avant earnings |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| ETF (3) | 2 122 | 1 317 | 188 | 143 | 141 | 141 | 141 | 3/3 |
+| Grandes valeurs (14) | 2 396 | 1 745 | 162 | 135 | 131 | 114 | 12 | 13/14 |
+| Wheel (16) | 621 | 440 | 63 | 40 | 37 | 13 | 0 | 6/16 |
+
+153 contrats retenus (contre 36) : 141 sur les ETF, 4 NVDA, 8 AMD.
+
+- **Grandes valeurs** : 13 titres sur 14 ont des contrats liquides ; seul le filtre earnings les bloque
+  en octobre. NVDA (earnings le 17 novembre) et AMD (3 novembre) passent sur l'échéance la plus courte.
+- **Wheel** : le spread reste le filtre limitant (35 % de passage). Six titres ont au moins un contrat
+  liquide : F, SOFI, AAL, RIVN, CLF, SNAP. ITUB, HBAN, KEY et RIG ont des chaînes trop pauvres et
+  pourront être retirés de l'univers. Tous publient leurs résultats avant novembre.
+- Le détail par titre se régénère avec `python -m scripts.data_spike`.
