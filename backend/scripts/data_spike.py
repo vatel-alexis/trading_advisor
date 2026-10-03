@@ -12,17 +12,13 @@ Standard library only (no yfinance/pandas/scipy), so it runs where PyPI is unrea
 """
 
 import csv
-import http.cookiejar
-import json
 import math
 import statistics
 import sys
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+
+from app.marketdata.yahoo import YahooClient
 
 ETFS = ["SPY", "QQQ", "IWM"]  # always screened: tradable during earnings season
 LARGE_CAPS = [
@@ -38,10 +34,6 @@ WHEEL_MAX_STRIKE = 20.0
 DEFAULT_UNIVERSE = ETFS + LARGE_CAPS + WHEEL
 
 RISK_FREE = 0.04
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
-)
 
 
 def norm_cdf(x: float) -> float:
@@ -107,37 +99,7 @@ def funnel(puts: list[dict], spot: float, today: date, f: Filters, next_earnings
     return counts, rows
 
 
-class Yahoo:  # pragma: no cover - network
-    """Minimal Yahoo Finance client: cookie + crumb, then the chart/options/quoteSummary APIs."""
-
-    def __init__(self) -> None:
-        jar = http.cookiejar.CookieJar()
-        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-        self.opener.addheaders = [("User-Agent", USER_AGENT)]
-        try:
-            self.opener.open("https://fc.yahoo.com", timeout=15)
-        except urllib.error.HTTPError:
-            pass  # 404 is expected; it still sets the A3 cookie
-        self.crumb = self._get("https://query1.finance.yahoo.com/v1/test/getcrumb").decode()
-
-    def _get(self, url: str) -> bytes:
-        for attempt in range(4):
-            try:
-                with self.opener.open(url, timeout=20) as resp:
-                    return resp.read()
-            except urllib.error.HTTPError as exc:
-                if (exc.code != 429 and exc.code < 500) or attempt == 3:
-                    raise
-                time.sleep(5 * 2**attempt)
-        raise RuntimeError("unreachable")
-
-    def json(self, path: str, **params) -> dict:
-        params["crumb"] = self.crumb
-        url = f"https://query2.finance.yahoo.com{path}?{urllib.parse.urlencode(params)}"
-        return json.loads(self._get(url))
-
-
-def _fetch(yahoo: Yahoo, ticker: str, today: date):  # pragma: no cover - network
+def _fetch(yahoo: YahooClient, ticker: str, today: date):  # pragma: no cover - network
     chart = yahoo.json(f"/v8/finance/chart/{ticker}", range="3mo", interval="1d")["chart"]
     closes = [c for c in chart["result"][0]["indicators"]["quote"][0]["close"] if c]
     spot = float(closes[-1])
@@ -176,7 +138,7 @@ def _fetch(yahoo: Yahoo, ticker: str, today: date):  # pragma: no cover - networ
 
 
 def main(tickers: list[str]) -> None:  # pragma: no cover - network
-    yahoo = Yahoo()
+    yahoo = YahooClient()
     today = date.today()
     filters = Filters()
     survivors: list[dict] = []

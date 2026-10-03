@@ -1,0 +1,41 @@
+"""Black-Scholes helpers. Yahoo gives implied volatility but no greeks, so deltas are recomputed."""
+
+import math
+from typing import Literal
+
+OptionType = Literal["put", "call"]
+
+
+def norm_cdf(x: float) -> float:
+    return 0.5 * (1 + math.erf(x / math.sqrt(2)))
+
+
+def _d1(spot: float, strike: float, years: float, iv: float, rate: float) -> float:
+    return (math.log(spot / strike) + (rate + iv**2 / 2) * years) / (iv * math.sqrt(years))
+
+
+def bs_delta(
+    option_type: OptionType, spot: float, strike: float, years: float, iv: float, rate: float
+) -> float:
+    """Black-Scholes delta: negative for puts, positive for calls."""
+    if years <= 0 or iv <= 0:
+        itm = strike > spot if option_type == "put" else strike < spot
+        return (-1.0 if option_type == "put" else 1.0) if itm else 0.0
+    d1 = _d1(spot, strike, years, iv, rate)
+    return norm_cdf(d1) - 1 if option_type == "put" else norm_cdf(d1)
+
+
+def prob_above(spot: float, level: float, years: float, iv: float, rate: float) -> float:
+    """Risk-neutral probability that the underlying ends above `level` at expiration."""
+    if level <= 0:
+        return 1.0
+    if years <= 0 or iv <= 0:
+        return 1.0 if spot > level else 0.0
+    d2 = _d1(spot, level, years, iv, rate) - iv * math.sqrt(years)
+    return norm_cdf(d2)
+
+
+def spread_pct(bid: float, ask: float) -> float:
+    """Bid/ask spread relative to the mid price."""
+    mid = (bid + ask) / 2
+    return (ask - bid) / mid if mid > 0 else math.inf
