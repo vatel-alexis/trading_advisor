@@ -30,7 +30,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -e '.[dev,spike]'
+      - run: pip install -e '.[dev]'
       - run: ruff check .
       - run: ruff format --check .
       - run: alembic upgrade head && alembic check
