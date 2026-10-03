@@ -32,7 +32,7 @@ docker compose up db
 
 # Backend
 cd backend
-pip install -e '.[dev,spike]'
+pip install -e '.[dev]'
 alembic upgrade head
 uvicorn app.main:app --reload
 python -m app.worker          # dans un autre terminal
@@ -62,7 +62,9 @@ python -m scripts.data_spike F SOFI AAPL  # titres au choix
 
 Le script affiche, pour chaque titre, combien de puts passent chaque filtre (DTE 30-50,
 delta 0.15-0.30, open interest, volume, spread, earnings). Il écrit les contrats retenus dans
-`spike_results.csv`. Il a besoin d'un accès réseau à Yahoo Finance.
+`spike_results.csv`. Il n'utilise que la bibliothèque standard Python (aucun `pip install`) et a
+besoin d'un accès réseau à `fc.yahoo.com`, `query1.finance.yahoo.com` et `query2.finance.yahoo.com`.
+Résultats du premier passage : [docs/spike-sprint0.md](docs/spike-sprint0.md).
 
 ## Garde-fou paper
 
