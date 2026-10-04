@@ -19,6 +19,8 @@ Compte simulé de 20 000, environnement broker démo uniquement.
 
 ## Démarrer avec Docker
 
+Guide complet (horaires, premier cycle paper, dépannage) : [docs/mise-en-service.md](docs/mise-en-service.md).
+
 ```bash
 cp .env.example .env
 docker compose up --build
