@@ -376,7 +376,9 @@ def _opened(session: Session, broker: Broker, order: Order, result: BrokerOrder)
         position.collateral = position.collateral * ratio
         if position.max_loss is not None:
             position.max_loss = position.max_loss * ratio
-    credit = _fill_price(order, result)
+    # Rounded first: 2.05 - 1.00 is 1.0499999... in floating point, which would put the
+    # profit target a cent below the one computed from the stored credit.
+    credit = round(_fill_price(order, result), 4)
     position.entry_credit = _dec(credit)
     position.status = PositionStatus.OPEN
     position.opened_at = result.filled_at or _now()
@@ -399,7 +401,7 @@ def _closed(session: Session, broker: Broker, order: Order, result: BrokerOrder)
     position = order.position
     held = _contracts(position)
     filled = min(result.filled_quantity, held)
-    debit = -_fill_price(order, result)
+    debit = round(-_fill_price(order, result), 4)
     pnl = realized_pnl(float(position.entry_credit or 0), debit, filled)
     position.realized_pnl = (position.realized_pnl or Decimal("0")) + _dec(pnl, 2)
     if filled < held:
