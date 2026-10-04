@@ -12,9 +12,9 @@ export function BreakdownTable({
 }) {
   const td = "px-2 py-1 tabular-nums";
   return (
-    <div className="overflow-x-auto rounded-lg border border-black/10 dark:border-white/10">
+    <div className="overflow-x-auto rounded-2xl border border-line bg-surface">
       <table className="w-full text-sm">
-        <thead className="bg-black/5 text-left text-xs uppercase tracking-wide opacity-70 dark:bg-white/5">
+        <thead className="bg-surface-2 text-left font-mono text-[11px] uppercase tracking-[0.12em] text-muted">
           <tr>
             <th className="px-2 py-1.5">{title}</th>
             <th className="px-2 py-1.5 text-right">Trades</th>
@@ -25,7 +25,7 @@ export function BreakdownTable({
         </thead>
         <tbody>
           {rows.map((r) => (
-            <tr key={r.key} className="border-t border-black/5 dark:border-white/5">
+            <tr key={r.key} className="border-t border-line/70">
               <td className="px-2 py-1">{label(r.key)}</td>
               <td className={`${td} text-right`}>{r.trades}</td>
               <td className={`${td} text-right`}>{pct(r.win_rate)}</td>

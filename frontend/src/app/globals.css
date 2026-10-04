@@ -1,41 +1,155 @@
 @import "tailwindcss";
 
+/* Same palette, type and surfaces as the CV site (vatel-alexis.github.io/webcv): a dark fintech
+   console by default, its light variant when the device asks for it. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-  /* Charts: one series hue, recessive grid and baseline. */
-  --series-1: #2a78d6;
-  --series-2: #d95f02;
-  --series-3: #1b9e77;
-  --series-4: #7570b3;
-  --series-5: #c2185b;
-  --benchmark: rgb(0 0 0 / 0.45);
-  --chart-grid: rgb(0 0 0 / 0.08);
-  --chart-axis: rgb(0 0 0 / 0.35);
+  --bg: #0a1122;
+  --surface: #111a31;
+  --surface-2: #16213d;
+  --line: #22304f;
+  --line-strong: #33466f;
+  --fg: #e6eef8;
+  --muted: #93a3bf;
+  --indigo: #5a4ee6;
+  --cyan: #3fe3ea;
+  --accent: #3fe3ea;
+  --success: #3ddc97;
+  --danger: #ff6b81;
+  --warning: #f5b84b;
+  --on-accent: #07101f;
+  --on-success: #07101f;
+  --on-danger: #07101f;
+  --grad: linear-gradient(120deg, var(--indigo), var(--cyan));
+  /* Charts: CV cyan first, then indigo, green, amber, pink. */
+  --series-1: #3fe3ea;
+  --series-2: #8b82ff;
+  --series-3: #3ddc97;
+  --series-4: #f5b84b;
+  --series-5: #ff7eb6;
+  --benchmark: rgb(230 238 248 / 0.5);
+  --chart-grid: rgb(147 163 191 / 0.14);
+  --chart-axis: rgb(147 163 191 / 0.45);
+  color-scheme: dark;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-}
-
-@media (prefers-color-scheme: dark) {
+@media (prefers-color-scheme: light) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-    --series-1: #3987e5;
-    --series-2: #f28e2b;
-    --series-3: #3fbf96;
-    --series-4: #9d98e0;
-    --series-5: #e5508f;
-    --benchmark: rgb(255 255 255 / 0.5);
-    --chart-grid: rgb(255 255 255 / 0.1);
-    --chart-axis: rgb(255 255 255 / 0.4);
+    --bg: #f5f7fc;
+    --surface: #ffffff;
+    --surface-2: #eef2fa;
+    --line: #d9e0ee;
+    --line-strong: #b9c4da;
+    --fg: #0d1630;
+    --muted: #55627d;
+    --indigo: #4a3fd4;
+    --cyan: #0aa7b3;
+    --accent: #0a8f9a;
+    --success: #0f8a5f;
+    --danger: #c62f45;
+    --warning: #a35f00;
+    --on-accent: #07101f;
+    --on-success: #ffffff;
+    --on-danger: #ffffff;
+    --series-1: #0a8f9a;
+    --series-2: #4a3fd4;
+    --series-3: #0f8a5f;
+    --series-4: #a35f00;
+    --series-5: #c2185b;
+    --benchmark: rgb(13 22 48 / 0.45);
+    --chart-grid: rgb(13 22 48 / 0.08);
+    --chart-axis: rgb(13 22 48 / 0.35);
+    color-scheme: light;
   }
 }
 
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--fg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-indigo: var(--indigo);
+  --color-cyan: var(--cyan);
+  --color-success: var(--success);
+  --color-danger: var(--danger);
+  --color-warning: var(--warning);
+  --color-on-accent: var(--on-accent);
+  --color-on-success: var(--on-success);
+  --color-on-danger: var(--on-danger);
+  --font-sans: var(--font-body), "Segoe UI", Roboto, sans-serif;
+  --font-display: var(--font-heading), "Helvetica Neue", Arial, sans-serif;
+  --font-mono: var(--font-code), ui-monospace, Menlo, Consolas, monospace;
+}
+
+@utility bg-grad {
+  background-image: var(--grad);
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body), "Segoe UI", Roboto, sans-serif;
+  line-height: 1.55;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Soft indigo and cyan glows behind the top of every page, as on the CV hero. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: 520px;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(520px 300px at 88% 0%, color-mix(in srgb, var(--cyan) 12%, transparent), transparent 70%),
+    radial-gradient(480px 300px at 0% 30%, color-mix(in srgb, var(--indigo) 14%, transparent), transparent 70%);
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--accent);
+}
+
+select option {
+  background: var(--surface);
+  color: var(--fg);
+}
+
+button:not(:disabled) {
+  cursor: pointer;
+}
+
+/* Phones: no zoom-in when a field gets focus (iOS zooms below 16px), wider tap targets. */
+@media (max-width: 640px) {
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
 }

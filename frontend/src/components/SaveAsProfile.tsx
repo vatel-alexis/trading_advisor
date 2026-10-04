@@ -18,7 +18,7 @@ export function SaveAsProfile({ params, suggestion }: { params: Params; suggesti
         value={name}
         onChange={(e) => setName(e.target.value)}
         maxLength={80}
-        className="rounded border border-black/20 bg-transparent px-2 py-1 dark:border-white/20"
+        className="rounded-lg border border-line-strong bg-background px-2.5 py-1.5"
       />
       <button
         disabled={pending || !name.trim()}
@@ -29,11 +29,11 @@ export function SaveAsProfile({ params, suggestion }: { params: Params; suggesti
             else setError(r.message);
           })
         }
-        className="rounded border border-black/20 px-3 py-1 font-medium hover:bg-black/5 disabled:opacity-40 dark:border-white/20 dark:hover:bg-white/10"
+        className="rounded-full border border-line-strong px-3 hover:border-accent py-1 font-medium hover:bg-surface-2 disabled:opacity-40"
       >
         Enregistrer ces réglages comme profil
       </button>
-      {error ? <span className="text-xs text-red-600">{error}</span> : null}
+      {error ? <span className="text-xs text-danger">{error}</span> : null}
     </div>
   );
 }

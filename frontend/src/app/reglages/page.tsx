@@ -15,7 +15,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
   if (!data) {
     return (
       <section className="space-y-4">
-        <h1 className="text-2xl font-semibold">Réglages</h1>
+        <h1 className="font-display text-2xl font-extrabold tracking-tight md:text-3xl">Réglages</h1>
         <ApiDown />
       </section>
     );
@@ -36,7 +36,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
   return (
     <section className="space-y-4">
       <div>
-        <h1 className="text-2xl font-semibold">Réglages</h1>
+        <h1 className="font-display text-2xl font-extrabold tracking-tight md:text-3xl">Réglages</h1>
         <p className="text-sm opacity-70">
           Profils de réglages de la stratégie. Le profil actif est celui du screener (version {data.active_version}) ;
           les autres servent aux backtests et peuvent être activés à tout moment.
@@ -49,16 +49,16 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
             <Link
               key={p.id}
               href={`/reglages?profil=${p.id}`}
-              className={`block rounded-lg border p-3 ${
+              className={`block rounded-2xl border p-3 ${
                 p.id === profile?.id
-                  ? "border-foreground/40 bg-black/5 dark:bg-white/5"
-                  : "border-black/10 hover:bg-black/5 dark:border-white/10 dark:hover:bg-white/5"
+                  ? "border-accent/60 bg-surface-2"
+                  : "border-line bg-surface hover:bg-surface-2"
               }`}
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="font-medium">{p.name}</span>
                 {p.is_active ? (
-                  <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase text-emerald-700 dark:text-emerald-400">
+                  <span className="rounded-full border border-success/40 bg-success/10 px-1.5 py-0.5 text-[10px] font-medium uppercase text-success">
                     Actif
                   </span>
                 ) : null}
@@ -76,7 +76,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
               ) : null}
             </Link>
           ))}
-          <Link href="/backtests" className="block px-1 pt-2 text-xs underline underline-offset-4 opacity-70">
+          <Link href="/backtests" className="block px-1 pt-2 text-xs text-accent underline decoration-accent/40 underline-offset-4 opacity-70">
             Voir et comparer les backtests
           </Link>
         </nav>

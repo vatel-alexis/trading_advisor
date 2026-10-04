@@ -18,8 +18,8 @@ export const pnlClass = (value: number | null | undefined) =>
   value == null || value === 0
     ? ""
     : value > 0
-      ? "text-emerald-600 dark:text-emerald-400"
-      : "text-red-600 dark:text-red-400";
+      ? "text-success"
+      : "text-danger";
 
 // "2026-10" -> "oct. 2026".
 export function month(value: string) {

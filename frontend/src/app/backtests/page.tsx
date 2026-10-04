@@ -14,7 +14,7 @@ export default async function Page() {
   if (!data || !profiles) {
     return (
       <section className="space-y-4">
-        <h1 className="text-2xl font-semibold">Backtests</h1>
+        <h1 className="font-display text-2xl font-extrabold tracking-tight md:text-3xl">Backtests</h1>
         <ApiDown />
       </section>
     );
@@ -27,11 +27,11 @@ export default async function Page() {
     <section className="space-y-4">
       {busy ? <AutoRefresh seconds={3} /> : null}
       <div>
-        <h1 className="text-2xl font-semibold">Backtests</h1>
+        <h1 className="font-display text-2xl font-extrabold tracking-tight md:text-3xl">Backtests</h1>
         <p className="text-sm opacity-70">
           Rejoue un profil de réglages jour par jour depuis 2019 sur des prix d&apos;options reconstruits. Les profils
           se modifient dans{" "}
-          <Link href="/reglages" className="underline underline-offset-4">
+          <Link href="/reglages" className="text-accent underline decoration-accent/40 underline-offset-4">
             Réglages
           </Link>
           .
@@ -50,14 +50,14 @@ export default async function Page() {
       />
 
       {data.runs.length === 0 ? (
-        <p className="rounded-lg border border-black/10 p-4 text-sm opacity-70 dark:border-white/10">
+        <p className="rounded-2xl border border-line bg-surface p-4 text-sm opacity-70">
           Aucun backtest pour l&apos;instant.
         </p>
       ) : (
         <form method="get" action="/backtests/comparer" className="space-y-2">
-          <div className="overflow-x-auto rounded-lg border border-black/10 dark:border-white/10">
+          <div className="overflow-x-auto rounded-2xl border border-line bg-surface">
             <table className="w-full text-sm">
-              <thead className="bg-black/5 text-left text-xs uppercase tracking-wide opacity-70 dark:bg-white/5">
+              <thead className="bg-surface-2 text-left font-mono text-[11px] uppercase tracking-[0.12em] text-muted">
                 <tr>
                   <th className={th}>Comparer</th>
                   <th className={th}>N°</th>
@@ -77,12 +77,12 @@ export default async function Page() {
                 {data.runs.map((r) => {
                   const s = r.summary;
                   return (
-                    <tr key={r.id} className="border-t border-black/5 dark:border-white/5">
+                    <tr key={r.id} className="border-t border-line/70">
                       <td className={th}>
                         <input type="checkbox" name="ids" value={r.id} disabled={r.status !== "done"} />
                       </td>
                       <td className={td}>
-                        <Link href={`/backtests/${r.id}`} className="underline underline-offset-4">
+                        <Link href={`/backtests/${r.id}`} className="text-accent underline decoration-accent/40 underline-offset-4">
                           {r.id}
                         </Link>
                       </td>
@@ -113,7 +113,7 @@ export default async function Page() {
               </tbody>
             </table>
           </div>
-          <button className="rounded border border-black/20 px-3 py-1.5 text-sm font-medium hover:bg-black/5 dark:border-white/20 dark:hover:bg-white/10">
+          <button className="rounded-full border border-line-strong px-3 hover:border-accent py-1.5 text-sm font-medium hover:bg-surface-2">
             Comparer la sélection
           </button>
         </form>

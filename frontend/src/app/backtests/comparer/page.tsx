@@ -39,13 +39,13 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
   if (ids.length === 0 || runs.length === 0) {
     return (
       <section className="space-y-4">
-        <h1 className="text-2xl font-semibold">Comparer des backtests</h1>
+        <h1 className="font-display text-2xl font-extrabold tracking-tight md:text-3xl">Comparer des backtests</h1>
         {profiles === null ? (
           <ApiDown />
         ) : (
           <p className="text-sm opacity-70">
             Coche des backtests terminés dans la{" "}
-            <Link href="/backtests" className="underline underline-offset-4">
+            <Link href="/backtests" className="text-accent underline decoration-accent/40 underline-offset-4">
               liste
             </Link>{" "}
             puis « Comparer la sélection ».
@@ -66,16 +66,16 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
   return (
     <section className="space-y-6">
       <div>
-        <Link href="/backtests" className="text-xs underline underline-offset-4 opacity-60">
+        <Link href="/backtests" className="text-xs text-accent underline decoration-accent/40 underline-offset-4 opacity-60">
           Tous les backtests
         </Link>
-        <h1 className="text-2xl font-semibold">Comparer des backtests</h1>
+        <h1 className="font-display text-2xl font-extrabold tracking-tight md:text-3xl">Comparer des backtests</h1>
         {new Set(runs.map((r) => `${r.start}${r.summary!.end}${r.capital}`)).size > 1 ? (
-          <p className="text-sm text-amber-600">Attention : les périodes ou les capitaux diffèrent.</p>
+          <p className="text-sm text-warning">Attention : les périodes ou les capitaux diffèrent.</p>
         ) : null}
       </div>
 
-      <div className="rounded-lg border border-black/10 p-4 dark:border-white/10">
+      <div className="rounded-2xl border border-line bg-surface p-4">
         <EquityLines
           capital={capital}
           lines={[
@@ -96,9 +96,9 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
         />
       </div>
 
-      <div className="overflow-x-auto rounded-lg border border-black/10 dark:border-white/10">
+      <div className="overflow-x-auto rounded-2xl border border-line bg-surface">
         <table className="w-full text-sm">
-          <thead className="bg-black/5 text-xs uppercase tracking-wide dark:bg-white/5">
+          <thead className="bg-surface-2 font-mono text-[11px] uppercase tracking-[0.12em] text-muted">
             <tr>
               <th className="px-3 py-2 text-left font-medium opacity-70">Mesure</th>
               {runs.map((r, i) => (
@@ -112,7 +112,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
           </thead>
           <tbody>
             {METRICS.map((m) => (
-              <tr key={m.label} className="border-t border-black/5 dark:border-white/5">
+              <tr key={m.label} className="border-t border-line/70">
                 <td className="px-3 py-1.5">{m.label}</td>
                 {runs.map((r) => (
                   <td
@@ -125,7 +125,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
               </tr>
             ))}
             {years.map((year) => (
-              <tr key={year} className="border-t border-black/5 dark:border-white/5">
+              <tr key={year} className="border-t border-line/70">
                 <td className="px-3 py-1.5">Année {year}</td>
                 {runs.map((r) => {
                   const ret = r.result!.yearly.find((y) => y.year === year)?.return ?? null;
@@ -146,11 +146,11 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
         {differing.length === 0 ? (
           <p className="text-sm opacity-70">Mêmes réglages (seules les hypothèses ou la période changent).</p>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-black/10 dark:border-white/10">
+          <div className="overflow-x-auto rounded-2xl border border-line bg-surface">
             <table className="w-full text-sm">
               <tbody>
                 {differing.map((f) => (
-                  <tr key={f.key} className="border-t border-black/5 first:border-0 dark:border-white/5">
+                  <tr key={f.key} className="border-t border-line/70 first:border-0">
                     <td className="px-3 py-1.5">{f.label}</td>
                     {runs.map((r) => (
                       <td key={r.id} className="px-3 py-1.5 text-right text-xs">
