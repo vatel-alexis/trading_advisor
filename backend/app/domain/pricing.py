@@ -39,3 +39,12 @@ def spread_pct(bid: float, ask: float) -> float:
     """Bid/ask spread relative to the mid price."""
     mid = (bid + ask) / 2
     return (ask - bid) / mid if mid > 0 else math.inf
+
+
+def bs_put_price(spot: float, strike: float, years: float, iv: float, rate: float) -> float:
+    """Black-Scholes price of a European put, no dividends."""
+    if years <= 0 or iv <= 0:
+        return max(0.0, strike - spot)
+    d1 = _d1(spot, strike, years, iv, rate)
+    d2 = d1 - iv * math.sqrt(years)
+    return strike * math.exp(-rate * years) * norm_cdf(-d2) - spot * norm_cdf(-d1)

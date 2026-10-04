@@ -12,6 +12,8 @@ const NAV = [
   { href: "/opportunites", label: "Opportunités" },
   { href: "/positions", label: "Positions" },
   { href: "/historique", label: "Historique" },
+  { href: "/reglages", label: "Réglages" },
+  { href: "/backtests", label: "Backtests" },
 ];
 
 export default function RootLayout({
@@ -23,7 +25,7 @@ export default function RootLayout({
     <html lang="fr">
       <body className="antialiased">
         <header className="border-b border-black/10 dark:border-white/10">
-          <nav className="mx-auto flex max-w-6xl items-center gap-6 px-4 py-3 text-sm">
+          <nav className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3 text-sm">
             <span className="font-semibold">Trading Advisor</span>
             <span className="rounded bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-400">
               PAPER

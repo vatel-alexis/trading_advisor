@@ -1,7 +1,7 @@
 import hmac
 from datetime import date, datetime
 from functools import lru_cache
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -17,7 +17,7 @@ from app.broker.alpaca import AlpacaBroker
 from app.config import get_settings
 from app.db import get_session
 from app.models.enums import OpportunityStatus, RejectReason
-from app.services import views
+from app.services import lab, views
 from app.services.trading import (
     DecisionError,
     accept_opportunity,
@@ -172,3 +172,133 @@ def close(
         "order_status": order.status.value,
         "limit_price": float(order.limit_price) if order.limit_price else None,
     }
+
+
+# --- settings lab: profiles and backtests ------------------------------------------------------
+
+
+def _lab(call, session: Session):
+    """Run a lab service call and commit, turning its refusals into HTTP errors."""
+    try:
+        out = call()
+    except lab.LabError as exc:
+        session.rollback()
+        raise HTTPException(exc.status_code, str(exc)) from exc
+    session.commit()
+    return out
+
+
+class ProfileCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    description: str | None = Field(default=None, max_length=500)
+    params: dict[str, Any] = Field(default_factory=dict)
+    # Start from this profile's parameters; `params` then holds only the changes.
+    copy_from: int | None = None
+
+
+class ProfileUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    description: str | None = Field(default=None, max_length=500)
+    params: dict[str, Any] | None = None
+
+
+@app.get("/profiles")
+def get_profiles(session: DbSession) -> dict[str, object]:
+    return _lab(lambda: lab.list_profiles(session), session)
+
+
+def _profile_out(session: Session, profile) -> dict[str, object]:
+    return lab.profile_view(profile, lab.active_config(session).profile_id)
+
+
+@app.post("/profiles")
+def create_profile(body: ProfileCreate, session: DbSession) -> dict[str, object]:
+    def call():
+        profile = lab.create_profile(
+            session, body.name, body.description, body.params, body.copy_from
+        )
+        return _profile_out(session, profile)
+
+    return _lab(call, session)
+
+
+@app.put("/profiles/{profile_id}")
+def update_profile(profile_id: int, body: ProfileUpdate, session: DbSession) -> dict[str, object]:
+    def call():
+        profile = lab.update_profile(session, profile_id, body.name, body.description, body.params)
+        return _profile_out(session, profile)
+
+    return _lab(call, session)
+
+
+@app.post("/profiles/{profile_id}/activate")
+def activate_profile(profile_id: int, session: DbSession) -> dict[str, object]:
+    def call():
+        config = lab.activate_profile(session, profile_id)
+        return {"profile_id": profile_id, "version": config.version}
+
+    return _lab(call, session)
+
+
+@app.delete("/profiles/{profile_id}")
+def delete_profile(profile_id: int, session: DbSession) -> dict[str, object]:
+    return _lab(lambda: lab.delete_profile(session, profile_id) or {"deleted": profile_id}, session)
+
+
+class BacktestRequest(BaseModel):
+    # A saved profile, a draft (params only), or a profile with unsaved changes (both).
+    profile_id: int | None = None
+    params: dict[str, Any] | None = None
+    name: str | None = Field(default=None, max_length=80)
+    start: date = lab.DEFAULT_START
+    end: date | None = None
+    capital: float = Field(default=20_000, gt=0, le=10_000_000)
+    model: dict[str, Any] | None = None
+    refresh_data: bool = False
+
+
+@app.get("/backtests")
+def get_backtests(session: DbSession) -> dict[str, object]:
+    return {
+        "runs": lab.list_runs(session),
+        "cache": lab.cache_view(session),
+        "model_fields": [{"key": k, "label": label} for k, label in lab.MODEL_SPECS],
+        "model_defaults": lab.model_defaults(),
+        "defaults": {
+            "start": lab.DEFAULT_START.isoformat(),
+            "end": market_today().isoformat(),
+            "capital": settings.starting_capital,
+        },
+    }
+
+
+@app.post("/backtests")
+def create_backtest(body: BacktestRequest, session: DbSession) -> dict[str, object]:
+    if body.profile_id is None and body.params is None:
+        raise HTTPException(422, "Choisis un profil ou des paramètres.")
+
+    def call():
+        run = lab.queue_backtest(
+            session,
+            body.profile_id,
+            body.params,
+            body.start,
+            body.end or market_today(),
+            body.capital,
+            body.model,
+            body.refresh_data,
+            body.name,
+        )
+        return lab.run_view(run)
+
+    return _lab(call, session)
+
+
+@app.get("/backtests/{run_id}")
+def get_backtest(run_id: int, session: DbSession) -> dict[str, object]:
+    return _lab(lambda: lab.run_view(lab.get_run(session, run_id), details=True), session)
+
+
+@app.delete("/backtests/{run_id}")
+def delete_backtest(run_id: int, session: DbSession) -> dict[str, object]:
+    return _lab(lambda: lab.delete_run(session, run_id) or {"deleted": run_id}, session)

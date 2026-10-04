@@ -5,7 +5,7 @@ Coût : 0 €. Aucune carte bancaire demandée. Aucune machine à laisser allum�
 | Morceau | Où | Rôle |
 | --- | --- | --- |
 | Base PostgreSQL | [Neon](https://neon.com), plan *Free* | Toutes les données (deals, positions, historique) |
-| Worker | GitHub Actions, workflow `Worker` | Screener et moniteur, toutes les 5 min en semaine |
+| Worker | GitHub Actions, workflow `Worker` | Screener, moniteur et backtests |
 | API | [Vercel](https://vercel.com), plan *Hobby*, dossier `backend` | Ce que le site appelle (lecture, acceptation des deals) |
 | Site | Vercel, plan *Hobby*, dossier `frontend` | L'interface, protégée par un mot de passe |
 
@@ -15,7 +15,11 @@ fait ce qui est dû à ce moment-là :
 - le moniteur de 8 h 00 à 17 h 55, heure de New York (synchro des ordres, assignations, stops,
   sortie à 21 DTE) ;
 - le screener une fois par jour, à partir de 10 h 30 à New York (16 h 30 à Paris). Si le passage
-  de 10 h 30 a été retardé, il est rattrapé au suivant.
+  de 10 h 30 a été retardé, il est rattrapé au suivant ;
+- puis les backtests demandés depuis la page Backtests du site.
+
+Il passe toutes les 5 minutes pendant la séance, en semaine, et toutes les 30 minutes le reste
+du temps : hors séance, un backtest lancé depuis le site démarre donc dans la demi-heure.
 
 Le dépôt est public, donc les minutes GitHub Actions sont gratuites et illimitées. La prise de
 profit à 50 % reste un ordre GTC chez Alpaca, actif en permanence.
@@ -102,4 +106,6 @@ Vercel redéploie l'API et le site à chaque fusion sur `main`.
   environ 10 h par jour de séance, on en consomme à peu près 60.
 - **Premier affichage lent.** La base Neon s'endort après 5 minutes sans requête, et l'API
   Vercel aussi : la première page après une pause peut mettre quelques secondes.
+- **Backtests longs.** Un seul passage du worker tourne à la fois : pendant un backtest (une à
+  deux minutes), le passage suivant du moniteur attend la fin.
 - Pour arrêter le worker : *Actions → Worker → ⋯ → Disable workflow*.

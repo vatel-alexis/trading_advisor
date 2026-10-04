@@ -157,6 +157,19 @@ l'ordre de prise de profit est replacé.
 Routes de lecture : `GET /dashboard`, `GET /opportunities?status=proposed`, `GET /positions`,
 `GET /history?kind=closed&kind=rejected&underlying=SPY&strategy=put_credit_spread&since=2026-10-01`.
 
+## Réglages et backtests
+
+| Page | Contenu |
+| --- | --- |
+| Réglages | Profils de paramètres : chaque filtre, indicateur et règle de sortie activable, valeurs éditables, profil actif utilisé par le screener |
+| Backtests | Lancement d'un backtest sur un profil (2019 → aujourd'hui), suivi de l'avancement, fiche détaillée, comparaison de plusieurs backtests |
+
+Les backtests tournent dans le worker. Détails, résultats et limites :
+[docs/reglages-backtests.md](docs/reglages-backtests.md).
+
+Routes : `GET|POST /profiles`, `PUT|DELETE /profiles/{id}`, `POST /profiles/{id}/activate`,
+`GET|POST /backtests`, `GET|DELETE /backtests/{id}`.
+
 ## Garde-fou paper
 
 `BROKER_ENV` n'accepte que `paper`, et les URL du broker sont fixées dans le code sur les

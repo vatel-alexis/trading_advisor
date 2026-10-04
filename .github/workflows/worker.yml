@@ -1,7 +1,8 @@
 name: Worker
 
-# The worker without a server: every 5 minutes on weekdays, `tick` runs whatever is due (monitor
-# 08:00-17:55 New York time, screener from 10:30 once a day) against the hosted database.
+# The worker without a server: `tick` runs whatever is due (monitor 08:00-17:55 New York time,
+# screener from 10:30 once a day), then the backtests queued from the site, against the hosted
+# database. Every 5 minutes around the US session on weekdays, every 30 minutes otherwise.
 # Needs the repository secrets DATABASE_URL, BROKER_API_KEY and BROKER_API_SECRET; until
 # DATABASE_URL is set, every run stops at the first step. Schedules only run from main.
 on:
@@ -9,6 +10,9 @@ on:
     # UTC, wide enough for both EDT and EST; `tick` checks New York time itself. Off the top of
     # the hour, when GitHub delays scheduled runs the most.
     - cron: "3-58/5 12-22 * * 1-5"
+    # Outside the session, only queued backtests have anything to do.
+    - cron: "10,40 0-11,23 * * *"
+    - cron: "10,40 12-22 * * 0,6"
   workflow_dispatch:
     inputs:
       command:
@@ -24,7 +28,8 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # A backtest takes a minute or two; the first one also downloads the market history.
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: backend

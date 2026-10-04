@@ -1,0 +1,325 @@
+"use client";
+
+import { useRouter } from "next/navigation";
+import { useMemo, useState, useTransition } from "react";
+
+import { activateProfile, createProfile, deleteProfile, launchBacktest, saveProfile } from "@/app/actions";
+import type { ActionResult, ParamField, ParamValue, Params, Profile } from "@/lib/api";
+
+// Form values are kept as typed by the user (strings for numbers and lists); they are
+// converted back on submit and validated by the API, which answers in French.
+type Draft = Record<string, string | boolean>;
+
+function toDraft(field: ParamField, value: ParamValue | undefined): string | boolean {
+  if (field.kind === "bool") return Boolean(value);
+  if (Array.isArray(value)) return value.join(", ");
+  if (typeof value !== "number") return "";
+  if (field.kind === "pct") return String(Math.round(value * 10000) / 100);
+  return String(value);
+}
+
+function fromDraft(field: ParamField, value: string | boolean): ParamValue {
+  if (field.kind === "bool") return Boolean(value);
+  const text = String(value).trim();
+  if (field.kind === "symbols")
+    return text
+      .split(/[,;\s]+/)
+      .filter(Boolean)
+      .map((s) => s.toUpperCase());
+  if (field.kind === "floats")
+    return text
+      .split(/[,;\s]+/)
+      .filter(Boolean)
+      .map(Number);
+  const number = Number(text.replace(",", "."));
+  return field.kind === "pct" ? Math.round(number * 100) / 10000 : number;
+}
+
+function draftOf(fields: ParamField[], params: Params): Draft {
+  return Object.fromEntries(fields.map((f) => [f.key, toDraft(f, params[f.key])]));
+}
+
+export function paramsOf(fields: ParamField[], draft: Draft): Params {
+  return Object.fromEntries(fields.map((f) => [f.key, fromDraft(f, draft[f.key])]));
+}
+
+export function ProfileEditor({
+  profile,
+  fields,
+  groups,
+  defaults,
+  backtestDefaults,
+}: {
+  profile: Profile;
+  fields: ParamField[];
+  groups: { key: string; label: string }[];
+  defaults: Params;
+  backtestDefaults: { start: string; end: string; capital: number };
+}) {
+  const router = useRouter();
+  const saved = useMemo(() => draftOf(fields, profile.params), [fields, profile.params]);
+  const defaultDraft = useMemo(() => draftOf(fields, defaults), [fields, defaults]);
+  const [draft, setDraft] = useState<Draft>(saved);
+  const [name, setName] = useState(profile.name);
+  const [description, setDescription] = useState(profile.description ?? "");
+  const [newName, setNewName] = useState("");
+  const [result, setResult] = useState<ActionResult | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  const dirtyKeys = fields.filter((f) => draft[f.key] !== saved[f.key]).map((f) => f.key);
+  const dirty = dirtyKeys.length > 0 || name !== profile.name || description !== (profile.description ?? "");
+
+  function run(action: () => Promise<ActionResult & { id?: number }>, then?: (id?: number) => void) {
+    startTransition(async () => {
+      const r = await action();
+      setResult(r);
+      if (r.ok && then) then(r.id);
+    });
+  }
+
+  const params = () => paramsOf(fields, draft);
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-[1fr_2fr]">
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-xs opacity-60">Nom</span>
+          <input value={name} onChange={(e) => setName(e.target.value)} className={INPUT} maxLength={80} />
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-xs opacity-60">Description</span>
+          <input
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            className={INPUT}
+            maxLength={500}
+          />
+        </label>
+      </div>
+
+      {groups.map((group) => (
+        <fieldset key={group.key} className="rounded-lg border border-black/10 p-4 dark:border-white/10">
+          <legend className="px-1 text-sm font-semibold">{group.label}</legend>
+          <div className="grid gap-x-6 gap-y-3 md:grid-cols-2">
+            {fields
+              .filter((f) => f.group === group.key)
+              .map((f) => (
+                <FieldInput
+                  key={f.key}
+                  field={f}
+                  value={draft[f.key]}
+                  defaultValue={defaultDraft[f.key]}
+                  changed={dirtyKeys.includes(f.key)}
+                  disabled={f.toggle != null && draft[f.toggle] === false}
+                  onChange={(v) => setDraft((d) => ({ ...d, [f.key]: v }))}
+                />
+              ))}
+          </div>
+        </fieldset>
+      ))}
+
+      <div className="sticky bottom-0 space-y-2 rounded-lg border border-black/10 bg-background p-3 shadow-sm dark:border-white/10">
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <button
+            disabled={pending || !dirty}
+            onClick={() =>
+              run(
+                () => saveProfile(profile.id, name, description, params()),
+                () => router.refresh(),
+              )
+            }
+            className={PRIMARY}
+          >
+            Enregistrer
+          </button>
+          <button
+            disabled={pending}
+            onClick={() =>
+              run(
+                () =>
+                  launchBacktest({
+                    profile_id: profile.id,
+                    params: dirtyKeys.length ? params() : undefined,
+                    name: dirtyKeys.length ? `${profile.name} (non enregistré)` : undefined,
+                    start: backtestDefaults.start,
+                    end: backtestDefaults.end,
+                    capital: backtestDefaults.capital,
+                  }),
+                (id) => router.push(`/backtests/${id}`),
+              )
+            }
+            className={SECONDARY}
+            title="Backtest 2019 → aujourd'hui avec les réglages affichés, même non enregistrés"
+          >
+            Lancer un backtest
+          </button>
+          {profile.is_active ? (
+            <span className="rounded bg-emerald-500/15 px-2 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-400">
+              Utilisé par le screener
+            </span>
+          ) : (
+            <button
+              disabled={pending || dirty}
+              onClick={() =>
+                run(
+                  () => activateProfile(profile.id),
+                  () => router.refresh(),
+                )
+              }
+              className={SECONDARY}
+              title={
+                dirty ? "Enregistre d'abord les modifications" : "Le screener du prochain jour utilisera ce profil"
+              }
+            >
+              Activer pour le screener
+            </button>
+          )}
+          <button
+            disabled={pending || !dirty}
+            onClick={() => {
+              setDraft(saved);
+              setName(profile.name);
+              setDescription(profile.description ?? "");
+            }}
+            className={LINK}
+          >
+            Annuler les modifications
+          </button>
+          <button disabled={pending} onClick={() => setDraft(defaultDraft)} className={LINK}>
+            Valeurs par défaut
+          </button>
+          {!profile.is_active ? (
+            <button
+              disabled={pending}
+              onClick={() => {
+                if (window.confirm(`Supprimer le profil « ${profile.name} » ?`)) {
+                  run(
+                    () => deleteProfile(profile.id),
+                    () => router.push("/reglages"),
+                  );
+                }
+              }}
+              className={`${LINK} text-red-600`}
+            >
+              Supprimer
+            </button>
+          ) : null}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="Nom du nouveau profil"
+            className={INPUT}
+            maxLength={80}
+          />
+          <button
+            disabled={pending || !newName.trim()}
+            onClick={() =>
+              run(
+                () => createProfile(newName.trim(), description, params()),
+                (id) => {
+                  setNewName("");
+                  router.push(`/reglages?profil=${id}`);
+                },
+              )
+            }
+            className={SECONDARY}
+          >
+            Enregistrer comme nouveau profil
+          </button>
+          {dirty ? <span className="text-xs text-amber-600">Modifications non enregistrées</span> : null}
+        </div>
+        {result ? (
+          <p className={`text-sm ${result.ok ? "text-emerald-600 dark:text-emerald-400" : "text-red-600"}`}>
+            {pending ? "…" : result.message}
+          </p>
+        ) : null}
+        {profile.is_active ? (
+          <p className="text-xs opacity-60">
+            Enregistrer ce profil change les réglages du screener dès son prochain passage. Les positions ouvertes
+            gardent les règles de sortie de la version avec laquelle elles ont été ouvertes.
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+const INPUT = "rounded border border-black/20 bg-transparent px-2 py-1 dark:border-white/20 disabled:opacity-40";
+const PRIMARY = "rounded bg-foreground px-3 py-1.5 font-medium text-background disabled:opacity-40";
+const SECONDARY =
+  "rounded border border-black/20 px-3 py-1.5 font-medium hover:bg-black/5 disabled:opacity-40 dark:border-white/20 dark:hover:bg-white/10";
+const LINK = "px-1 py-1.5 underline underline-offset-4 opacity-70 hover:opacity-100 disabled:opacity-30";
+
+function FieldInput({
+  field,
+  value,
+  defaultValue,
+  changed,
+  disabled,
+  onChange,
+}: {
+  field: ParamField;
+  value: string | boolean;
+  defaultValue: string | boolean;
+  changed: boolean;
+  disabled: boolean;
+  onChange: (value: string | boolean) => void;
+}) {
+  const differs = value !== defaultValue;
+  const hint = field.help ? <span className="text-xs opacity-60">{field.help}</span> : null;
+  const marker = changed ? "border-l-2 border-amber-500 pl-2" : "border-l-2 border-transparent pl-2";
+
+  if (field.kind === "bool") {
+    return (
+      <label className={`flex flex-col gap-0.5 text-sm ${marker} ${disabled ? "opacity-40" : ""}`}>
+        <span className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={Boolean(value)}
+            disabled={disabled}
+            onChange={(e) => onChange(e.target.checked)}
+            className="h-4 w-4"
+          />
+          <span className="font-medium">{field.label}</span>
+          {differs ? <span className="text-xs opacity-50">(défaut : {defaultValue ? "oui" : "non"})</span> : null}
+        </span>
+        {hint}
+      </label>
+    );
+  }
+
+  const isList = field.kind === "symbols" || field.kind === "floats";
+  const unit = field.kind === "pct" ? "%" : null;
+  const scale = field.kind === "pct" ? 100 : 1;
+  return (
+    <label
+      className={`flex flex-col gap-1 text-sm ${marker} ${disabled ? "opacity-40" : ""} ${isList ? "md:col-span-2" : ""}`}
+    >
+      <span className="flex flex-wrap items-baseline gap-x-2">
+        <span>{field.label}</span>
+        {differs ? (
+          <span className="text-xs opacity-50">
+            (défaut : {String(defaultValue)}
+            {unit ? ` ${unit}` : ""})
+          </span>
+        ) : null}
+      </span>
+      <span className="flex items-center gap-1">
+        <input
+          type={isList ? "text" : "number"}
+          value={String(value)}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.value)}
+          min={field.min != null ? field.min * scale : undefined}
+          max={field.max != null ? field.max * scale : undefined}
+          step={field.kind === "int" ? 1 : field.step != null ? field.step * scale : "any"}
+          className={`${INPUT} ${isList ? "w-full font-mono text-xs" : "w-32 tabular-nums"}`}
+        />
+        {unit ? <span className="text-xs opacity-60">{unit}</span> : null}
+      </span>
+      {hint}
+    </label>
+  );
+}

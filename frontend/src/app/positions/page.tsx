@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 const EXIT_LABEL: Record<string, string> = {
   stop_loss: "Stop en cours",
-  time_exit: "Sortie 21 j en cours",
+  time_exit: "Sortie anticipée en cours",
   manual_close: "Rachat en cours",
 };
 
@@ -23,6 +23,7 @@ function State({ p }: { p: OptionPosition }) {
       </span>
     );
   }
+  if (p.take_profit_price == null) return <span className="opacity-70">Sans objectif de gain</span>;
   return <span className="opacity-70">TP à {price(p.take_profit_price)}</span>;
 }
 

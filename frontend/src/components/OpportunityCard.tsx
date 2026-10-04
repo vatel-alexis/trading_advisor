@@ -75,13 +75,13 @@ export function OpportunityCard({ deal }: { deal: Opportunity }) {
         <Row label="Prime totale" value={usd(deal.credit_total)} />
         <Row label="Capital requis" value={usd(deal.collateral)} />
         <Row label="Poids" value={pct(deal.weight)} />
-        <Row label="Objectif 50 %" value={`${usd(deal.take_profit_gain)}`} />
+        <Row label="Objectif de gain" value={`${usd(deal.take_profit_gain)}`} />
         <Row label="Perte max" value={usd(deal.max_loss)} />
         <Row label="Point mort" value={price(deal.breakeven)} />
         <Row label="IV Rank" value={deal.iv_rank == null ? "—" : deal.iv_rank.toFixed(0)} />
       </dl>
       <p className="mt-2 text-xs opacity-60">
-        Rachat auto à {price(deal.take_profit_price)}
+        {deal.take_profit_price != null ? `Rachat auto à ${price(deal.take_profit_price)}` : "Pas d'objectif de gain"}
         {deal.stop_price != null ? `, stop à ${price(deal.stop_price)}` : ", pas de stop"}
         {deal.time_exit_date ? `, sortie le ${day(deal.time_exit_date)}` : ""}.
         {deal.next_earnings ? ` Résultats le ${day(deal.next_earnings)}.` : ""}

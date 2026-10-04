@@ -62,7 +62,8 @@ def realized_vol_series(closes: Sequence[float], window: int = HV_WINDOW) -> lis
 
 
 def hv30(closes: Sequence[float]) -> float | None:
-    series = realized_vol_series(closes)
+    # Last value of realized_vol_series, without computing the whole year.
+    series = realized_vol_series(closes[-(HV_WINDOW + 1) :])
     return series[-1] if series else None
 
 
