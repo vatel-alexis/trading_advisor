@@ -3,6 +3,7 @@
 Usage (the fetch step needs network access to Yahoo Finance; the run step is offline):
     python -m scripts.backtest fetch                     # history -> .cache/backtest.json
     python -m scripts.backtest run --out ../docs         # scenarios -> backtest-resultats.md
+    python -m scripts.backtest import                    # cache file -> database (interface)
 
 Each scenario changes a few strategy parameters (or model assumptions) from the defaults; the
 model rows rerun two scenarios with cheaper or richer options to show what depends on them.
@@ -157,7 +158,7 @@ def render(results: dict[str, BacktestResult], market: MarketHistory) -> str:  #
 
 def main() -> None:  # pragma: no cover - CLI
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("command", choices=["fetch", "run"])
+    parser.add_argument("command", choices=["fetch", "run", "import"])
     parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
     parser.add_argument("--out", type=Path, default=Path("backtest-out"))
     parser.add_argument("--scenarios", nargs="*", default=list(SCENARIOS))
@@ -171,6 +172,18 @@ def main() -> None:  # pragma: no cover - CLI
         )
         history.save(args.cache)
         print(f"Historique enregistré dans {args.cache}")
+        return
+
+    if args.command == "import":
+        # The interface's backtests read the history from the database; seeding it from a
+        # cache file avoids a first Yahoo download of several minutes.
+        from app.db import SessionLocal
+        from app.services.lab import store_history
+
+        with SessionLocal() as session:
+            row = store_history(session, MarketHistory.load(args.cache))
+            session.commit()
+        print(f"Historique {row.first_day} → {row.last_day}, {len(row.symbols)} titres en base")
         return
 
     names = [n for n in args.scenarios if n in SCENARIOS]

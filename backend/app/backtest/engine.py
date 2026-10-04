@@ -6,6 +6,7 @@ backtest accepts all proposals that Alexis would validate by hand).
 """
 
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -32,6 +33,7 @@ from app.domain.screener import PUT_CREDIT_SPREAD, screen
 
 IV_HISTORY_DAYS = 252
 CALENDAR_SYMBOL = "SPY"  # trading days of the simulation
+PROGRESS_EVERY = 20  # trading days between two progress reports
 
 
 @dataclass
@@ -160,11 +162,13 @@ def run_backtest(
     end: date,
     capital: float = 20_000.0,
     model: ModelConfig | None = None,
+    progress: Callable[[float], None] | None = None,
 ) -> BacktestResult:
+    """Simulate `params` from `start` to `end`; `progress` gets the share of days done."""
     model = model or ModelConfig()
     series = build_series(market, params, model)
     calendar = [d for d in market.symbols[CALENDAR_SYMBOL].dates if start <= d <= end]
-    lowest_width = max(params.spread_widths)
+    lowest_width = max(params.spread_widths, default=0.0)
 
     realized = 0.0
     open_trades: list[Trade] = []
@@ -172,8 +176,11 @@ def run_backtest(
     equity: list[tuple[date, float, float]] = []
     funnel: Counter = Counter()
     days_with_deal = 0
+    last_exit: dict[str, date] = {}
 
-    for day in calendar:
+    for n, day in enumerate(calendar):
+        if progress is not None and n % PROGRESS_EVERY == 0:
+            progress(n / len(calendar))
         index = {sym: s.index_of(day) for sym, s in series.items()}
 
         # 1. Exits during the day.
@@ -191,6 +198,7 @@ def run_backtest(
                 continue
             t.exit_day = day
             t.exit_reason, t.exit_price = fill
+            last_exit[t.underlying] = day
             realized += t.pnl
             closed.append(t)
         open_trades = still_open
@@ -226,6 +234,12 @@ def run_backtest(
             account,
             iv_history,
             open_underlyings={t.underlying for t in open_trades},
+            open_sectors=Counter(t.sector for t in open_trades if t.sector),
+            cooling_down={
+                sym
+                for sym, exited in last_exit.items()
+                if (day - exited).days < params.reentry_cooldown_days
+            },
         )
         funnel.update(result.funnel)
         if result.selected:
@@ -263,6 +277,8 @@ def run_backtest(
         engaged = sum(t.collateral for t in open_trades)
         equity.append((day, capital + realized + unrealized, engaged))
 
+    if progress is not None:
+        progress(1.0)
     return BacktestResult(
         params, model, capital, closed + open_trades, equity, funnel, days_with_deal
     )

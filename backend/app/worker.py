@@ -8,6 +8,7 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from apscheduler.executors.pool import ProcessPoolExecutor
 from apscheduler.schedulers.blocking import BlockingScheduler
 
 from app.broker.alpaca import AlpacaBroker
@@ -15,6 +16,7 @@ from app.config import get_settings
 from app.db import SessionLocal
 from app.domain.params import StrategyParams
 from app.marketdata.yahoo import YahooProvider
+from app.services.lab import fail_interrupted, run_queued_backtests
 from app.services.screening import active_config, run_screener
 from app.services.trading import monitor
 
@@ -46,6 +48,8 @@ def position_monitor() -> None:
 
 def build_scheduler() -> BlockingScheduler:
     scheduler = BlockingScheduler(timezone=MARKET_TZ)
+    # Backtests are CPU-bound: one at a time, in a child process, so the monitor stays on time.
+    scheduler.add_executor(ProcessPoolExecutor(max_workers=1), "backtests")
     scheduler.add_job(heartbeat, "interval", minutes=5, id="heartbeat")
     # 10:30 ET: an hour after the open, once option quotes have settled.
     scheduler.add_job(
@@ -62,9 +66,21 @@ def build_scheduler() -> BlockingScheduler:
         max_instances=1,
         coalesce=True,
     )
+    scheduler.add_job(
+        run_queued_backtests,
+        "interval",
+        seconds=15,
+        id="backtests",
+        executor="backtests",
+        max_instances=1,
+        coalesce=True,
+    )
     return scheduler
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    with SessionLocal() as session:
+        if interrupted := fail_interrupted(session):
+            logger.warning("%s backtest(s) interrompu(s) marqué(s) en échec", interrupted)
     build_scheduler().start()

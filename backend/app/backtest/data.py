@@ -4,6 +4,7 @@ Everything comes from Yahoo (standard library only) and is cached as one JSON fi
 simulation and its sensitivity runs do not hit the network again.
 """
 
+import gzip
 import json
 import urllib.request
 from collections.abc import Iterable, Sequence
@@ -81,6 +82,25 @@ class MarketHistory:
             for k, levels in data["vol_indices"].items()
         }
         return cls(symbols, vols)
+
+    def to_bytes(self) -> bytes:
+        return gzip.compress(json.dumps(self.to_json()).encode())
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> "MarketHistory":
+        return cls.from_json(json.loads(gzip.decompress(data)))
+
+    def merged(self, other: "MarketHistory") -> "MarketHistory":
+        """This history with `other`'s symbols and index levels added or replacing ours."""
+        vols = {k: dict(v) for k, v in self.vol_indices.items()}
+        for k, levels in other.vol_indices.items():
+            vols.setdefault(k, {}).update(levels)
+        return MarketHistory({**self.symbols, **other.symbols}, vols)
+
+    def span(self) -> tuple[date, date] | None:
+        """First and last day common to the calendar (SPY when present)."""
+        h = self.symbols.get("SPY") or next(iter(self.symbols.values()), None)
+        return (h.dates[0], h.dates[-1]) if h and h.dates else None
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
