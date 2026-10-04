@@ -13,7 +13,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import create_engine, delete, func, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from app.backtest.data import HistoryFetcher, MarketHistory
 from app.backtest.engine import CALENDAR_SYMBOL, run_backtest
@@ -420,7 +420,9 @@ def run_view(run: BacktestRun, details: bool = False) -> dict[str, Any]:
 
 
 def list_runs(session: Session, limit: int = 100) -> list[dict[str, Any]]:
-    runs = session.scalars(select(BacktestRun).order_by(BacktestRun.id.desc()).limit(limit)).all()
+    # The details (trades, curve) stay in the database: up to ~600 kB per run.
+    query = select(BacktestRun).options(defer(BacktestRun.result))
+    runs = session.scalars(query.order_by(BacktestRun.id.desc()).limit(limit)).all()
     out = []
     for r in runs:
         view = run_view(r)
