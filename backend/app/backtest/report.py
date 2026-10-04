@@ -4,7 +4,7 @@ import csv
 import math
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
 
@@ -183,3 +183,131 @@ def write_trades_csv(trades: Iterable[Trade], path: Path) -> None:
                     round(t.pnl, 2),
                 ]
             )
+
+
+# --- payload stored for the interface ---------------------------------------------------------
+
+
+def _num(x: float, places: int = 4) -> float | None:
+    """JSON has no infinity: an undefined ratio (no loss, no trade) is stored as null."""
+    return round(x, places) if math.isfinite(x) else None
+
+
+def trade_row(t: Trade) -> dict:
+    return {
+        "underlying": t.underlying,
+        "strategy": t.strategy,
+        "group": t.group,
+        "sector": t.sector,
+        "entry_day": t.entry_day.isoformat(),
+        "expiration": t.expiration.isoformat(),
+        "strikes": [k for k, _ in t.legs],
+        "quantity": t.quantity,
+        "credit": round(t.credit, 4),
+        "short_delta": round(t.short_delta, 4),
+        "pop": round(t.pop, 4),
+        "iv_rank": None if t.iv_rank is None else round(t.iv_rank, 1),
+        "exit_day": t.exit_day.isoformat() if t.exit_day else None,
+        "exit_reason": t.exit_reason,
+        "exit_price": None if t.exit_price is None else round(t.exit_price, 4),
+        "pnl": round(t.pnl, 2),
+        "days_held": t.days_held,
+    }
+
+
+def weekly(points: Sequence[tuple[date, float, float]]) -> list[tuple[date, float, float]]:
+    """Last point of each ISO week, plus the very first day: ~400 points for 8 years."""
+    out: list[tuple[date, float, float]] = []
+    for p in points:
+        if out and out[-1][0].isocalendar()[:2] == p[0].isocalendar()[:2] and len(out) > 1:
+            out[-1] = p
+        else:
+            out.append(p)
+    return out
+
+
+def yearly_returns(points: Sequence[tuple[date, float, float]], capital: float) -> list[dict]:
+    """Calendar-year return of the account value; the first year starts from the capital."""
+    rows, base, year, last = [], capital, None, capital
+    for day, value, _ in points:
+        if year is not None and day.year != year:
+            rows.append({"year": year, "return": _num(last / base - 1)})
+            base = last
+        year, last = day.year, value
+    if year is not None:
+        rows.append({"year": year, "return": _num(last / base - 1)})
+    return rows
+
+
+def payload(result: BacktestResult, benchmark: Sequence[tuple[date, float]]) -> tuple[dict, dict]:
+    """(summary, details) of a run, JSON-ready. `benchmark` is SPY's (day, close) series."""
+    s = summarize(result)
+    bench = {d: c for d, c in benchmark if s.start <= d <= s.end}
+    days = sorted(bench)
+    spy_final, spy_dd = (
+        buy_and_hold([(d, bench[d]) for d in days], result.capital)
+        if days
+        else (result.capital, 0.0)
+    )
+    summary = {
+        "start": s.start.isoformat(),
+        "end": s.end.isoformat(),
+        "capital": s.capital,
+        "final": round(s.final, 2),
+        "cagr": _num(s.cagr),
+        "max_drawdown": _num(s.max_drawdown),
+        "sharpe": _num(s.sharpe, 2),
+        "trades": s.trades,
+        "win_rate": _num(s.win_rate),
+        "avg_win": round(s.avg_win, 2),
+        "avg_loss": round(s.avg_loss, 2),
+        "profit_factor": _num(s.profit_factor, 2),
+        "avg_days_held": round(s.avg_days_held, 1),
+        "avg_engaged_pct": _num(s.avg_engaged_pct),
+        "days_with_deal_pct": _num(s.days_with_deal_pct),
+        "open_at_end": sum(t.exit_day is None for t in result.trades),
+        "benchmark_final": round(spy_final, 2),
+        "benchmark_cagr": _num(cagr(result.capital, spy_final, (s.end - s.start).days)),
+        "benchmark_drawdown": _num(spy_dd),
+    }
+    first = bench[days[0]] if days else None
+    equity = [
+        {
+            "date": d.isoformat(),
+            "equity": round(v, 2),
+            "engaged": round(e, 2),
+            "benchmark": (
+                round(result.capital * bench[d] / first, 2) if first and d in bench else None
+            ),
+        }
+        for d, v, e in weekly(result.equity)
+    ]
+
+    def rows(key: Callable[[Trade], object]) -> list[dict]:
+        return [
+            {
+                "key": str(k),
+                "trades": n,
+                "win_rate": _num(w),
+                "pnl": round(p, 2),
+                "avg": round(a, 2),
+            }
+            for k, n, w, p, a in breakdown(result.trades, key)
+        ]
+
+    details = {
+        "equity": equity,
+        "yearly": yearly_returns(result.equity, result.capital),
+        "breakdowns": {
+            "exit_reason": rows(lambda t: t.exit_reason),
+            "strategy": rows(lambda t: t.strategy),
+            "group": rows(lambda t: t.group),
+            "underlying": rows(lambda t: t.underlying),
+            "year": rows(lambda t: t.entry_day.year),
+            "entry_dte": rows(lambda t: f"{(t.expiration - t.entry_day).days // 5 * 5:03d}+"),
+        },
+        "funnel": dict(result.funnel),
+        "model": asdict(result.model),
+        "trades": [trade_row(t) for t in result.trades],
+    }
+    return summary, details

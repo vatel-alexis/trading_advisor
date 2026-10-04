@@ -164,15 +164,152 @@ export const getOpportunities = () => get<Opportunity[]>("/opportunities");
 export const getPositions = () => get<Positions>("/positions");
 export const getHistory = (query: URLSearchParams) => get<History>(`/history?${query}`);
 
+// --- settings lab -----------------------------------------------------------------------------
+
+export type ParamValue = boolean | number | string[] | number[];
+export type Params = Record<string, ParamValue>;
+
+export type ParamField = {
+  key: string;
+  label: string;
+  group: string;
+  kind: "bool" | "int" | "float" | "pct" | "symbols" | "floats";
+  help: string | null;
+  // Switch that enables this field; the field is greyed out while it is off.
+  toggle: string | null;
+  min: number | null;
+  max: number | null;
+  step: number | null;
+};
+
+export type Profile = {
+  id: number;
+  name: string;
+  description: string | null;
+  params: Params;
+  changed: string[];
+  is_active: boolean;
+  created_at: string | null;
+  updated_at: string;
+};
+
+export type Profiles = {
+  profiles: Profile[];
+  active_profile_id: number | null;
+  active_version: number;
+  groups: { key: string; label: string }[];
+  fields: ParamField[];
+  defaults: Params;
+};
+
+export type BacktestSummary = {
+  start: string;
+  end: string;
+  capital: number;
+  final: number;
+  cagr: number | null;
+  max_drawdown: number | null;
+  sharpe: number | null;
+  trades: number;
+  win_rate: number | null;
+  avg_win: number;
+  avg_loss: number;
+  profit_factor: number | null;
+  avg_days_held: number;
+  avg_engaged_pct: number | null;
+  days_with_deal_pct: number | null;
+  open_at_end: number;
+  benchmark_final: number;
+  benchmark_cagr: number | null;
+  benchmark_drawdown: number | null;
+  note?: string;
+};
+
+export type BreakdownRow = { key: string; trades: number; win_rate: number | null; pnl: number; avg: number };
+
+export type BacktestTrade = {
+  underlying: string;
+  strategy: Strategy;
+  group: string;
+  sector: string | null;
+  entry_day: string;
+  expiration: string;
+  strikes: number[];
+  quantity: number;
+  credit: number;
+  short_delta: number;
+  pop: number;
+  iv_rank: number | null;
+  exit_day: string | null;
+  exit_reason: string | null;
+  exit_price: number | null;
+  pnl: number;
+  days_held: number;
+};
+
+export type EquityPoint = { date: string; equity: number; engaged: number; benchmark: number | null };
+
+export type BacktestResult = {
+  equity: EquityPoint[];
+  yearly: { year: number; return: number | null }[];
+  breakdowns: Record<"exit_reason" | "strategy" | "group" | "underlying" | "year" | "entry_dte", BreakdownRow[]>;
+  funnel: Record<string, number>;
+  model: Record<string, number>;
+  trades: BacktestTrade[];
+};
+
+export type BacktestStatus = "queued" | "running" | "done" | "failed";
+
+export type BacktestRun = {
+  id: number;
+  profile_id: number | null;
+  profile_name: string;
+  status: BacktestStatus;
+  progress: number;
+  step: string | null;
+  error: string | null;
+  start: string;
+  end: string;
+  capital: number;
+  model: Record<string, number>;
+  created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  summary: BacktestSummary | null;
+  params: Params;
+};
+
+export type BacktestDetail = BacktestRun & { result: BacktestResult | null };
+
+export type Backtests = {
+  runs: BacktestRun[];
+  cache: { fetched_at: string; first_day: string; last_day: string; symbols: string[]; size: number } | null;
+  model_fields: { key: string; label: string }[];
+  model_defaults: Record<string, number>;
+  defaults: { start: string; end: string; capital: number };
+};
+
+export const getProfiles = () => get<Profiles>("/profiles");
+export const getBacktests = () => get<Backtests>("/backtests");
+export const getBacktest = (id: number | string) => get<BacktestDetail>(`/backtests/${id}`);
+
 export type ActionResult = { ok: boolean; message: string };
 
 // POST to the backend; the API's error message (in French) is passed back to the user as is.
 export async function post(path: string, body: object): Promise<ActionResult & { data?: unknown }> {
+  return send("POST", path, body);
+}
+
+export async function send(
+  method: "POST" | "PUT" | "DELETE",
+  path: string,
+  body?: object,
+): Promise<ActionResult & { data?: unknown }> {
   try {
     const res = await fetch(`${API_URL}${path}`, {
-      method: "POST",
+      method,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: body ? JSON.stringify(body) : undefined,
       cache: "no-store",
     });
     const data: unknown = await res.json().catch(() => null);

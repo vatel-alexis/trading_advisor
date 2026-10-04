@@ -29,6 +29,10 @@ class StrategyConfig(Timestamped, Base):
     version: Mapped[int] = mapped_column(Integer, unique=True)
     params: Mapped[dict[str, Any]] = mapped_column(JSON)
     is_active: Mapped[bool] = mapped_column(default=False)
+    # Settings profile this version was written from (None for versions made before profiles).
+    profile_id: Mapped[int | None] = mapped_column(
+        ForeignKey("strategy_profiles.id", ondelete="SET NULL")
+    )
 
 
 class ScreenerRun(Base):

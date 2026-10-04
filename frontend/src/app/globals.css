@@ -5,6 +5,11 @@
   --foreground: #171717;
   /* Charts: one series hue, recessive grid and baseline. */
   --series-1: #2a78d6;
+  --series-2: #d95f02;
+  --series-3: #1b9e77;
+  --series-4: #7570b3;
+  --series-5: #c2185b;
+  --benchmark: rgb(0 0 0 / 0.45);
   --chart-grid: rgb(0 0 0 / 0.08);
   --chart-axis: rgb(0 0 0 / 0.35);
 }
@@ -19,6 +24,11 @@
     --background: #0a0a0a;
     --foreground: #ededed;
     --series-1: #3987e5;
+    --series-2: #f28e2b;
+    --series-3: #3fbf96;
+    --series-4: #9d98e0;
+    --series-5: #e5508f;
+    --benchmark: rgb(255 255 255 / 0.5);
     --chart-grid: rgb(255 255 255 / 0.1);
     --chart-axis: rgb(255 255 255 / 0.4);
   }

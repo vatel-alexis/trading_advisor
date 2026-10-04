@@ -389,6 +389,8 @@ def _opened(session: Session, broker: Broker, order: Order, result: BrokerOrder)
     _event(position, PositionEventType.OPENED, credit=round(credit, 4), contracts=filled)
 
     params = _params(session, position)
+    if not params.use_take_profit:
+        return
     target = take_profit_price(credit, params)
     take_profit = _new_order(position, OrderPurpose.TAKE_PROFIT, target, "gtc")
     session.flush()
@@ -619,7 +621,10 @@ def _restore_target(session: Session, broker: Broker, position: Position) -> Non
         return
     if any(o.purpose == OrderPurpose.TAKE_PROFIT for o in _live_orders(session, position)):
         return
-    target = take_profit_price(float(position.entry_credit), _params(session, position))
+    params = _params(session, position)
+    if not params.use_take_profit:
+        return
+    target = take_profit_price(float(position.entry_credit), params)
     order = _new_order(position, OrderPurpose.TAKE_PROFIT, target, "gtc")
     session.flush()
     submit_order(session, broker, order)

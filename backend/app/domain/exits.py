@@ -46,11 +46,16 @@ def evaluate_exit(
 
     Covered calls have no stop: the shares cover the call, and being called away is part of
     the wheel. The stop is checked first so a losing position at 21 DTE is tagged as a stop.
+    A rule switched off in the parameters never fires.
     """
-    if position.strategy != "covered_call" and mark >= stop_price(position.credit, params):
+    if (
+        params.use_stop_loss
+        and position.strategy != "covered_call"
+        and mark >= stop_price(position.credit, params)
+    ):
         return ExitSignal(STOP_LOSS, mark)
-    if mark <= take_profit_price(position.credit, params):
+    if params.use_take_profit and mark <= take_profit_price(position.credit, params):
         return ExitSignal(PROFIT_TARGET, mark)
-    if (position.expiration - today).days <= params.exit_dte:
+    if params.use_time_exit and (position.expiration - today).days <= params.exit_dte:
         return ExitSignal(TIME_EXIT, mark)
     return None

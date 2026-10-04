@@ -23,6 +23,8 @@ COVERED_CALL = "covered_call"
 FUNNEL_STAGES = (
     "contracts",
     "iv_rank",
+    "trend",
+    "iv_hv",
     "dte",
     "delta",
     "open_interest",
@@ -113,17 +115,27 @@ def _years(today: date, expiration: date) -> float:
     return (expiration - today).days / 365
 
 
+def _oi_ok(q: OptionQuote, p: StrategyParams) -> bool:
+    return not p.use_open_interest_filter or q.open_interest >= p.min_open_interest
+
+
+def _volume_ok(q: OptionQuote, p: StrategyParams) -> bool:
+    return not p.use_volume_filter or q.volume >= p.min_volume
+
+
+def _spread_ok(q: OptionQuote, p: StrategyParams) -> bool:
+    return not p.use_spread_filter or spread_pct(q.bid, q.ask) <= p.max_spread_pct
+
+
 def _liquid(q: OptionQuote, p: StrategyParams) -> bool:
-    return (
-        q.open_interest >= p.min_open_interest
-        and q.volume >= p.min_volume
-        and spread_pct(q.bid, q.ask) <= p.max_spread_pct
-    )
+    return _oi_ok(q, p) and _volume_ok(q, p) and _spread_ok(q, p)
 
 
-def _earnings_ok(group: str, next_earnings: date | None, today: date, expiration: date) -> bool:
+def _earnings_ok(
+    group: str, next_earnings: date | None, today: date, expiration: date, p: StrategyParams
+) -> bool:
     """ETFs have no earnings. A stock with an unknown date is rejected rather than risked."""
-    if group == "etf":
+    if group == "etf" or not p.use_earnings_filter:
         return True
     if next_earnings is None:
         return False
@@ -158,6 +170,22 @@ def _assign_scores(candidates: Sequence[Candidate], p: StrategyParams) -> None:
             )
 
 
+def trend_ok(closes: Sequence[float], p: StrategyParams) -> bool:
+    """Last close above its simple moving average; too short a history fails the filter."""
+    if not p.use_trend_filter:
+        return True
+    n = p.trend_sma_days
+    if len(closes) < n:
+        return False
+    return closes[-1] > sum(closes[-n:]) / n
+
+
+def _iv_hv_ok(stats: "UnderlyingStats", p: StrategyParams) -> bool:
+    if not p.use_iv_hv_filter:
+        return True
+    return bool(stats.iv30 and stats.hv30) and stats.iv30 / stats.hv30 >= p.min_iv_hv_ratio
+
+
 def _put_trades(
     snap: MarketSnapshot,
     group: str,
@@ -170,9 +198,15 @@ def _put_trades(
     if group == "wheel":
         puts = [q for q in puts if q.strike <= p.wheel_max_strike]
     funnel["contracts"] += len(puts)
-    if stats.iv_rank is None or stats.iv_rank.value < p.min_iv_rank:
+    if p.use_iv_rank_filter and (stats.iv_rank is None or stats.iv_rank.value < p.min_iv_rank):
         return []
     funnel["iv_rank"] += len(puts)
+    if not trend_ok(snap.closes, p):
+        return []
+    funnel["trend"] += len(puts)
+    if not _iv_hv_ok(stats, p):
+        return []
+    funnel["iv_hv"] += len(puts)
 
     rows = [q for q in puts if p.dte_min <= (q.expiration - today).days <= p.dte_max]
     funnel["dte"] += len(rows)
@@ -184,13 +218,13 @@ def _put_trades(
     }
     rows = [q for q in rows if p.delta_min <= abs(deltas[q.symbol]) <= p.delta_max]
     funnel["delta"] += len(rows)
-    rows = [q for q in rows if q.open_interest >= p.min_open_interest]
+    rows = [q for q in rows if _oi_ok(q, p)]
     funnel["open_interest"] += len(rows)
-    rows = [q for q in rows if q.volume >= p.min_volume]
+    rows = [q for q in rows if _volume_ok(q, p)]
     funnel["volume"] += len(rows)
-    rows = [q for q in rows if spread_pct(q.bid, q.ask) <= p.max_spread_pct]
+    rows = [q for q in rows if _spread_ok(q, p)]
     funnel["spread"] += len(rows)
-    rows = [q for q in rows if _earnings_ok(group, snap.next_earnings, today, q.expiration)]
+    rows = [q for q in rows if _earnings_ok(group, snap.next_earnings, today, q.expiration, p)]
     funnel["earnings"] += len(rows)
 
     by_key = {(q.expiration, q.strike): q for q in puts}
@@ -246,7 +280,7 @@ def _put_trades(
             )
         )
     funnel["structure"] += len(trades)
-    trades = [t for t in trades if t.aroc >= p.min_aroc]
+    trades = [t for t in trades if not p.use_aroc_filter or t.aroc >= p.min_aroc]
     funnel["aroc"] += len(trades)
     return trades
 
@@ -259,9 +293,7 @@ def _build_spread(
         long = by_key.get((short.expiration, short.strike - width))
         if long is None or long.ask <= 0:
             continue
-        if long.open_interest < p.min_open_interest:
-            continue
-        if spread_pct(long.bid, long.ask) > p.max_spread_pct:
+        if not _oi_ok(long, p) or not _spread_ok(long, p):
             continue
         credit = short.mid - long.mid
         if credit < p.min_credit or short.bid - long.ask <= 0 or credit >= width:
@@ -335,11 +367,15 @@ def screen(
     iv_history: Mapping[str, Sequence[float]] | None = None,
     share_lots: Sequence[ShareLot] = (),
     open_underlyings: set[str] | frozenset[str] = frozenset(),
+    open_sectors: Mapping[str, int] | None = None,
+    cooling_down: set[str] | frozenset[str] = frozenset(),
 ) -> ScreenResult:
     """Run the full funnel and pick at most `max_deals` new trades that fit the risk limits.
 
     `iv_history` holds past daily IV30 values per underlying (today excluded).
     `open_underlyings` already have a position: no second entry on them.
+    `open_sectors` counts open positions per sector, used when the sector limit includes them.
+    `cooling_down` had a position closed within `reentry_cooldown_days`.
     """
     iv_history = iv_history or {}
     funnel: Counter = Counter({stage: 0 for stage in FUNNEL_STAGES})
@@ -363,6 +399,8 @@ def screen(
     selected: list[Candidate] = []
     skipped: dict[str, str] = {}
     sectors: Counter = Counter()
+    if params.sector_limit_includes_open:
+        sectors.update(open_sectors or {})
     for c in ranked:
         if len(selected) >= params.max_deals:
             skipped[c.underlying] = "max_deals"
@@ -370,7 +408,10 @@ def screen(
         if c.underlying in open_underlyings:
             skipped[c.underlying] = "already_open"
             continue
-        if c.sector and sectors[c.sector] >= params.max_per_sector:
+        if c.underlying in cooling_down:
+            skipped[c.underlying] = "cooldown"
+            continue
+        if params.use_sector_limit and c.sector and sectors[c.sector] >= params.max_per_sector:
             skipped[c.underlying] = "sector_limit"
             continue
         quantity = size_position(c.collateral, account, params)
