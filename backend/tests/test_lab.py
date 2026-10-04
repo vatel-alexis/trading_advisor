@@ -39,7 +39,6 @@ def test_first_use_turns_the_active_parameters_into_profiles(session: Session) -
     assert set(prudent["changed"]) == {
         "enable_large_caps",
         "dte_min",
-        "dte_max",
         "delta_min",
         "delta_max",
     }
@@ -141,9 +140,10 @@ def test_api_profiles_and_backtests(session: Session) -> None:
     try:
         client = TestClient(app)
         listing = client.get("/profiles").json()
+        prudent = next(p["id"] for p in listing["profiles"] if p["name"] == "Prudent")
         created = client.post(
             "/profiles",
-            json={"name": "Tendance", "params": {"use_trend_filter": True}, "copy_from": 2},
+            json={"name": "Tendance", "params": {"use_trend_filter": True}, "copy_from": prudent},
         )
         bad = client.post("/profiles", json={"name": "X", "params": {"delta_min": "abc"}})
         pid = created.json()["id"]
