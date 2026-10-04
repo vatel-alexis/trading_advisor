@@ -1,6 +1,7 @@
 services:
   db:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_USER: trading
       POSTGRES_PASSWORD: trading
@@ -16,6 +17,7 @@ services:
 
   api:
     build: ./backend
+    restart: unless-stopped
     env_file:
       - path: .env
         required: false
@@ -26,9 +28,15 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # Healthy once the migrations ran and uvicorn answers, so the worker never sees an old schema.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      retries: 20
 
   worker:
     build: ./backend
+    restart: unless-stopped
     command: python -m app.worker
     env_file:
       - path: .env
@@ -37,10 +45,11 @@ services:
       DATABASE_URL: postgresql+psycopg://trading:trading@db:5432/trading_advisor
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
 
   web:
     build: ./frontend
+    restart: unless-stopped
     environment:
       API_URL: http://api:8000
     ports:
