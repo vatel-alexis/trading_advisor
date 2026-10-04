@@ -11,7 +11,8 @@ Compte simulé de 20 000, environnement broker démo uniquement.
 | `backend/app` | API FastAPI, worker planifié, modèle de données SQLAlchemy |
 | `backend/app/domain` | Moteurs de stratégie et de risque en Python pur (Sprint 2) |
 | `backend/app/marketdata` | Données de marché Yahoo (prix, earnings, chaînes d'options) |
-| `backend/app/services` | Exécution du screener : données, moteurs et base |
+| `backend/app/broker` | Client Alpaca paper : ordres options, cotations, assignations (Sprint 3) |
+| `backend/app/services` | Screener, puis cycle de vie des ordres et positions |
 | `backend/migrations` | Migrations Alembic |
 | `backend/scripts/data_spike.py` | Spike données du Sprint 0 |
 | `frontend` | Interface Next.js + Tailwind (4 sections) |
@@ -101,7 +102,39 @@ python -m scripts.screen            # univers complet, compte vide de 20 000
 python -m scripts.screen SPY NVDA F
 ```
 
+## Ordres Alpaca paper (Sprint 3)
+
+Accepter une opportunité passe l'ordre d'ouverture ; la rejeter enregistre le motif.
+
+```bash
+curl -X POST localhost:8000/opportunities/12/accept -H 'Content-Type: application/json' \
+  -d '{"idempotency_key": "<uuid généré au clic>"}'
+curl -X POST localhost:8000/opportunities/13/reject -H 'Content-Type: application/json' \
+  -d '{"idempotency_key": "<uuid>", "reason": "no_conviction", "note": "Fed demain"}'
+```
+
+| Étape | Comportement |
+| --- | --- |
+| Acceptation | Contrôle de nouveau la limite de 50 % engagé et la position déjà ouverte sur le titre, puis ordre limite *day* au crédit mid du screener (`limit_price` pour le changer). Spread en ordre multi-jambes, CSP et Covered Call en ordre simple. Un double clic avec la même clé n'envoie qu'un ordre. |
+| Exécution | Le worker synchronise les ordres toutes les 5 minutes (8 h-17 h, heure de New York). Au remplissage, la position passe `open` avec le crédit réellement reçu et un ordre GTC de rachat à 50 % du crédit part aussitôt. Un ordre d'ouverture expiré ou refusé passe la position en `canceled`. |
+| Stop et 21 DTE | Pendant la séance, chaque position est valorisée au mid (table `position_marks`). Stop (coût de rachat ≥ 2x le crédit) ou 21 DTE : l'ordre GTC est annulé et confirmé, puis rachat au prix naturel (vendeur à l'ask, acheteur au bid), re-tarifé au bout de 15 minutes s'il n'est pas exécuté. |
+| Expiration | Une expiration sans valeur clôt la position en gardant tout le crédit. |
+| Wheel | Un CSP assigné devient un lot de 100 actions par contrat au prix de revient strike − crédit (la prime n'est pas comptée deux fois). Le Covered Call accepté est rattaché au lot. Quand les actions sont appelées, le call garde sa prime et le lot réalise (strike − prix de revient) × actions. |
+
+Alpaca publie les assignations et expirations du compte paper le lendemain matin seulement ;
+le worker les lit chaque matin avant l'ouverture. Une assignation anticipée sur un spread
+n'est pas traitée automatiquement : elle est signalée dans `position_events`.
+
+Pour vérifier la connexion sans base (compte, cotations, forme des ordres) :
+
+```bash
+cd backend
+python -m scripts.broker_check                 # lecture seule
+python -m scripts.broker_check --probe-orders  # + 4 ordres impossibles à exécuter, annulés aussitôt
+```
+
 ## Garde-fou paper
 
 `BROKER_ENV` n'accepte que `paper`, et les URL du broker sont fixées dans le code sur les
 environnements démo (`app/config.py`). Passer en réel demande une modification de code.
+Le client Alpaca refuse en plus toute autre URL que celle du compte paper.

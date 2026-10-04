@@ -50,6 +50,7 @@ class Position(Timestamped, Base):
         back_populates="position", cascade="all, delete-orphan"
     )
     events: Mapped[list["PositionEvent"]] = relationship(back_populates="position")
+    orders: Mapped[list["Order"]] = relationship(back_populates="position")
 
 
 class PositionLeg(Base):
@@ -90,6 +91,7 @@ class Order(Timestamped, Base):
     quote_ask: Mapped[Decimal | None]
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    position: Mapped[Position] = relationship(back_populates="orders")
     fills: Mapped[list["Fill"]] = relationship(back_populates="order")
 
 

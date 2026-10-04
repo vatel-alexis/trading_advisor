@@ -48,6 +48,8 @@ class PositionStatus(enum.StrEnum):
     CLOSED = "closed"
     EXPIRED = "expired"
     ASSIGNED = "assigned"
+    # The opening order never filled (expired, canceled or rejected).
+    CANCELED = "canceled"
 
 
 class ExitReason(enum.StrEnum):
@@ -88,3 +90,4 @@ class PositionEventType(enum.StrEnum):
     ASSIGNED = "assigned"
     CALLED_AWAY = "called_away"
     RECONCILIATION_MISMATCH = "reconciliation_mismatch"
+    ORDER_REJECTED = "order_rejected"

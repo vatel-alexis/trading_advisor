@@ -2,7 +2,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.domain.market import MarketSnapshot
@@ -26,22 +26,6 @@ class FakeProvider:
         if symbol not in self.snapshots:
             raise LookupError(f"no data for {symbol}")
         return self.snapshots[symbol]
-
-
-@pytest.fixture
-def session(migrated_db: str):
-    """A session whose writes are rolled back after the test."""
-    engine = create_engine(migrated_db)
-    connection = engine.connect()
-    transaction = connection.begin()
-    db = Session(bind=connection, join_transaction_mode="create_savepoint")
-    try:
-        yield db
-    finally:
-        db.close()
-        transaction.rollback()
-        connection.close()
-        engine.dispose()
 
 
 def test_run_stores_deals_and_iv_and_expires_the_previous_proposals(session: Session) -> None:
