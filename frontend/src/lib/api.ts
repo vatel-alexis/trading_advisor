@@ -1,6 +1,9 @@
 // Server-side base URL of the FastAPI backend (the browser never talks to the broker).
 export const API_URL = process.env.API_URL ?? "http://localhost:8000";
 
+// Shared secret the hosted API requires (API_TOKEN on both sides); unset on the local stack.
+const AUTH: Record<string, string> = process.env.API_TOKEN ? { "X-API-Token": process.env.API_TOKEN } : {};
+
 export type Health = { status: string; database: string; broker_env: string };
 
 export type Strategy = "put_credit_spread" | "cash_secured_put" | "covered_call";
@@ -150,7 +153,7 @@ export type History = { rows: HistoryRow[]; underlyings: string[] };
 
 async function get<T>(path: string): Promise<T | null> {
   try {
-    const res = await fetch(`${API_URL}${path}`, { cache: "no-store" });
+    const res = await fetch(`${API_URL}${path}`, { headers: AUTH, cache: "no-store" });
     if (!res.ok) return null;
     return (await res.json()) as T;
   } catch {
@@ -308,7 +311,7 @@ export async function send(
   try {
     const res = await fetch(`${API_URL}${path}`, {
       method,
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH },
       body: body ? JSON.stringify(body) : undefined,
       cache: "no-store",
     });

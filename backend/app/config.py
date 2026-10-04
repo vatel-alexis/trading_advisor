@@ -22,6 +22,17 @@ class Settings(BaseSettings):
     broker_api_secret: str = ""
     starting_capital: int = 20_000
     cors_origins: list[str] = ["http://localhost:3000"]
+    # Shared secret between the site and a publicly hosted API; empty = no check (local stack).
+    api_token: str = ""
+
+    @field_validator("database_url")
+    @classmethod
+    def psycopg_driver(cls, value: str) -> str:
+        """Accept the plain URL hosted Postgres providers (Neon...) hand out."""
+        for prefix in ("postgres://", "postgresql://"):
+            if value.startswith(prefix):
+                return "postgresql+psycopg://" + value.removeprefix(prefix)
+        return value
 
     @field_validator("broker_env", mode="before")
     @classmethod

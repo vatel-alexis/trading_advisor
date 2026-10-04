@@ -20,6 +20,8 @@ Compte simulé de 20 000, environnement broker démo uniquement.
 ## Démarrer avec Docker
 
 Guide complet (horaires, premier cycle paper, dépannage) : [docs/mise-en-service.md](docs/mise-en-service.md).
+Sans machine allumée, tout peut tourner gratuitement (Neon, GitHub Actions, Vercel) :
+[docs/hebergement-gratuit.md](docs/hebergement-gratuit.md).
 
 ```bash
 cp .env.example .env

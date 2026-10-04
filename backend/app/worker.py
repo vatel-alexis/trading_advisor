@@ -7,26 +7,28 @@ Jobs are registered here as sprints land: daily screener (~10:30 ET), position m
     python -m app.worker check      # preflight: database, broker, Yahoo, next runs
     python -m app.worker screener   # one screener run now (e.g. stack started after 10:30)
     python -m app.worker monitor    # one monitor pass now
+    python -m app.worker tick       # what is due now + queued backtests (hosted cron)
 """
 
 import argparse
 import logging
 import os
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from apscheduler.executors.pool import ProcessPoolExecutor
 from apscheduler.schedulers.blocking import BlockingScheduler
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 
 from app.broker.alpaca import AlpacaBroker
 from app.config import get_settings
 from app.db import SessionLocal
 from app.domain.params import StrategyParams
 from app.marketdata.yahoo import YahooProvider
+from app.models.strategy import ScreenerRun
 from app.services.lab import fail_interrupted, run_queued_backtests
 from app.services.screening import active_config, run_screener
 from app.services.trading import monitor
@@ -56,6 +58,51 @@ def position_monitor() -> None:
     broker = AlpacaBroker.from_settings(get_settings())
     with SessionLocal() as session:
         monitor(session, broker, today)
+
+
+def due_jobs(now: datetime, last_screener_day: date | None) -> list[str]:
+    """Jobs a stateless cron tick must run at `now` (market time), same hours as the scheduler.
+
+    The screener is caught up later in the day when the 10:30 tick was missed or delayed, but
+    never twice a day.
+    """
+    if now.weekday() >= 5:
+        return []
+    jobs = []
+    if 8 <= now.hour <= 17:
+        jobs.append("monitor")
+    if (10, 30) <= (now.hour, now.minute) and now.hour < 16 and last_screener_day != now.date():
+        jobs.append("screener")
+    return jobs
+
+
+def tick() -> bool:
+    """Run what is due now, then the queued backtests; False if a job failed (the others run).
+
+    Ticks never overlap (one at a time on the host), so a backtest still 'running' when a tick
+    starts was cut off by the previous one's timeout.
+    """
+    now = datetime.now(ZoneInfo(MARKET_TZ))
+    with SessionLocal() as session:
+        if interrupted := fail_interrupted(session):
+            logger.warning("%s backtest(s) interrompu(s) marqué(s) en échec", interrupted)
+        last = session.execute(select(func.max(ScreenerRun.started_at))).scalar()
+    last_day = last.astimezone(ZoneInfo(MARKET_TZ)).date() if last else None
+    jobs = due_jobs(now, last_day)
+    logger.info("tick %s: %s", now.isoformat(timespec="minutes"), jobs or "nothing due")
+    ok = True
+    for job in jobs:
+        try:
+            {"monitor": position_monitor, "screener": daily_screener}[job]()
+        except Exception:
+            logger.exception("%s failed", job)
+            ok = False
+    try:
+        run_queued_backtests()
+    except Exception:
+        logger.exception("backtests failed")
+        ok = False
+    return ok
 
 
 def build_scheduler() -> BlockingScheduler:
@@ -139,11 +186,13 @@ def check() -> bool:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.worker")
-    parser.add_argument("command", nargs="?", choices=["check", "screener", "monitor"])
+    parser.add_argument("command", nargs="?", choices=["check", "screener", "monitor", "tick"])
     command = parser.parse_args(argv).command
     logging.basicConfig(level=logging.INFO)
     if command == "check":
         return 0 if check() else 1
+    if command == "tick":
+        return 0 if tick() else 1
     if command == "screener":
         daily_screener()
     elif command == "monitor":
