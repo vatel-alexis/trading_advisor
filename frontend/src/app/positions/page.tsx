@@ -14,11 +14,11 @@ const EXIT_LABEL: Record<string, string> = {
 
 function State({ p }: { p: OptionPosition }) {
   if (p.status === "pending") {
-    return <span className="text-amber-600">Ordre d&apos;ouverture à {price(p.open_limit)}</span>;
+    return <span className="text-warning">Ordre d&apos;ouverture à {price(p.open_limit)}</span>;
   }
   if (p.exit_order) {
     return (
-      <span className="text-amber-600">
+      <span className="text-warning">
         {EXIT_LABEL[p.exit_order.purpose] ?? p.exit_order.purpose} à {price(p.exit_order.limit)}
       </span>
     );
@@ -34,7 +34,7 @@ export default async function Page() {
     <section className="space-y-4">
       <AutoRefresh seconds={30} />
       <div>
-        <h1 className="text-2xl font-semibold">Positions ouvertes</h1>
+        <h1 className="font-display text-2xl font-extrabold tracking-tight md:text-3xl">Positions ouvertes</h1>
         <p className="text-sm opacity-70">
           Mark au milieu bid/ask, relevé toutes les 5 minutes pendant la séance. Le rachat manuel annule l&apos;ordre de
           prise de profit puis rachète au prix naturel (marché ouvert uniquement).
@@ -45,67 +45,121 @@ export default async function Page() {
       ) : (
         <>
           {data.options.length === 0 ? (
-            <p className="rounded-lg border border-black/10 p-4 text-sm opacity-70 dark:border-white/10">
+            <p className="rounded-2xl border border-line bg-surface p-4 text-sm opacity-70">
               Aucune position ouverte.
             </p>
           ) : (
-            <div className="overflow-x-auto rounded-lg border border-black/10 dark:border-white/10">
-              <table className="w-full text-sm">
-                <thead className="bg-black/5 text-left text-xs uppercase tracking-wide opacity-70 dark:bg-white/5">
-                  <tr>
-                    <th className="px-3 py-2">Titre</th>
-                    <th className="px-3 py-2">Strikes</th>
-                    <th className="px-3 py-2">Échéance</th>
-                    <th className="px-3 py-2 text-right">Contrats</th>
-                    <th className="px-3 py-2 text-right">Crédit</th>
-                    <th className="px-3 py-2 text-right">Mark</th>
-                    <th className="px-3 py-2 text-right">P&amp;L latent</th>
-                    <th className="px-3 py-2 text-right">% du crédit</th>
-                    <th className="px-3 py-2">État</th>
-                    <th className="px-3 py-2" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.options.map((p) => (
-                    <tr key={p.id} className="border-t border-black/5 dark:border-white/5">
-                      <td className="px-3 py-2">
-                        <div className="font-medium">{p.underlying}</div>
-                        <div className="text-xs opacity-60">{STRATEGY_LABEL[p.strategy]}</div>
-                      </td>
-                      <td className="px-3 py-2 font-mono text-xs">{strikes(p.legs.map((l) => l.strike))}</td>
-                      <td className="px-3 py-2">
-                        {day(p.expiration)}
-                        <div className="text-xs opacity-60">{p.dte != null ? `${p.dte} j` : ""}</div>
-                      </td>
-                      <td className="px-3 py-2 text-right tabular-nums">{p.contracts}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{price(p.entry_credit)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">
-                        {price(p.mark)}
-                        <div className="text-xs opacity-60">{p.marked_at ? dateTime(p.marked_at) : "pas encore"}</div>
-                      </td>
-                      <td className={`px-3 py-2 text-right tabular-nums ${pnlClass(p.unrealized_pnl)}`}>
-                        {signed(p.unrealized_pnl)}
-                      </td>
-                      <td className={`px-3 py-2 text-right tabular-nums ${pnlClass(p.profit_pct)}`}>
-                        {pct(p.profit_pct)}
-                      </td>
-                      <td className="px-3 py-2 text-xs">
+            <>
+              {/* Phones: one card per position, the table needs a wider screen. */}
+              <div className="space-y-3 md:hidden">
+                {data.options.map((p) => (
+                  <article key={p.id} className="rounded-2xl border border-line bg-surface p-4">
+                    <header className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="font-display text-lg font-bold">{p.underlying}</div>
+                        <div className="text-xs text-muted">{STRATEGY_LABEL[p.strategy]}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className={`font-display text-lg font-bold tabular-nums ${pnlClass(p.unrealized_pnl)}`}>
+                          {signed(p.unrealized_pnl)}
+                        </div>
+                        <div className={`text-xs tabular-nums ${pnlClass(p.profit_pct)}`}>{pct(p.profit_pct)} du crédit</div>
+                      </div>
+                    </header>
+                    <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-[13px]">
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-muted">Strikes</dt>
+                        <dd className="font-mono text-xs">{strikes(p.legs.map((l) => l.strike))}</dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-muted">Échéance</dt>
+                        <dd className="tabular-nums">{p.dte != null ? `${p.dte} j` : day(p.expiration)}</dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-muted">Contrats</dt>
+                        <dd className="tabular-nums">{p.contracts}</dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-muted">Crédit</dt>
+                        <dd className="tabular-nums">{price(p.entry_credit)}</dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-muted">Mark</dt>
+                        <dd className="tabular-nums">{price(p.mark)}</dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-muted">Relevé</dt>
+                        <dd className="tabular-nums">{p.marked_at ? dateTime(p.marked_at) : "pas encore"}</dd>
+                      </div>
+                    </dl>
+                    <div className="mt-3 flex items-end justify-between gap-3 border-t border-line/70 pt-3 text-xs">
+                      <div>
+                        <div>{day(p.expiration)}</div>
                         <State p={p} />
-                      </td>
-                      <td className="px-3 py-2 text-right">{p.can_close ? <CloseButton id={p.id} /> : null}</td>
+                      </div>
+                      {p.can_close ? <CloseButton id={p.id} /> : null}
+                    </div>
+                  </article>
+                ))}
+              </div>
+              <div className="hidden overflow-x-auto rounded-2xl border border-line bg-surface md:block">
+                <table className="w-full text-sm">
+                  <thead className="bg-surface-2 text-left font-mono text-[11px] uppercase tracking-[0.12em] text-muted">
+                    <tr>
+                      <th className="px-3 py-2">Titre</th>
+                      <th className="px-3 py-2">Strikes</th>
+                      <th className="px-3 py-2">Échéance</th>
+                      <th className="px-3 py-2 text-right">Contrats</th>
+                      <th className="px-3 py-2 text-right">Crédit</th>
+                      <th className="px-3 py-2 text-right">Mark</th>
+                      <th className="px-3 py-2 text-right">P&amp;L latent</th>
+                      <th className="px-3 py-2 text-right">% du crédit</th>
+                      <th className="px-3 py-2">État</th>
+                      <th className="px-3 py-2" />
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {data.options.map((p) => (
+                      <tr key={p.id} className="border-t border-line/70">
+                        <td className="px-3 py-2">
+                          <div className="font-medium">{p.underlying}</div>
+                          <div className="text-xs opacity-60">{STRATEGY_LABEL[p.strategy]}</div>
+                        </td>
+                        <td className="px-3 py-2 font-mono text-xs">{strikes(p.legs.map((l) => l.strike))}</td>
+                        <td className="px-3 py-2">
+                          {day(p.expiration)}
+                          <div className="text-xs opacity-60">{p.dte != null ? `${p.dte} j` : ""}</div>
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums">{p.contracts}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">{price(p.entry_credit)}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">
+                          {price(p.mark)}
+                          <div className="text-xs opacity-60">{p.marked_at ? dateTime(p.marked_at) : "pas encore"}</div>
+                        </td>
+                        <td className={`px-3 py-2 text-right tabular-nums ${pnlClass(p.unrealized_pnl)}`}>
+                          {signed(p.unrealized_pnl)}
+                        </td>
+                        <td className={`px-3 py-2 text-right tabular-nums ${pnlClass(p.profit_pct)}`}>
+                          {pct(p.profit_pct)}
+                        </td>
+                        <td className="px-3 py-2 text-xs">
+                          <State p={p} />
+                        </td>
+                        <td className="px-3 py-2 text-right">{p.can_close ? <CloseButton id={p.id} /> : null}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
 
           {data.share_lots.length > 0 ? (
             <div className="space-y-2">
-              <h2 className="text-lg font-semibold">Actions détenues (wheel)</h2>
-              <div className="overflow-x-auto rounded-lg border border-black/10 dark:border-white/10">
+              <h2 className="font-display text-lg font-bold">Actions détenues (wheel)</h2>
+              <div className="overflow-x-auto rounded-2xl border border-line bg-surface">
                 <table className="w-full text-sm">
-                  <thead className="bg-black/5 text-left text-xs uppercase tracking-wide opacity-70 dark:bg-white/5">
+                  <thead className="bg-surface-2 text-left font-mono text-[11px] uppercase tracking-[0.12em] text-muted">
                     <tr>
                       <th className="px-3 py-2">Titre</th>
                       <th className="px-3 py-2">Depuis</th>
@@ -117,7 +171,7 @@ export default async function Page() {
                   </thead>
                   <tbody>
                     {data.share_lots.map((lot) => (
-                      <tr key={lot.id} className="border-t border-black/5 dark:border-white/5">
+                      <tr key={lot.id} className="border-t border-line/70">
                         <td className="px-3 py-2 font-medium">{lot.underlying}</td>
                         <td className="px-3 py-2">{day(lot.opened_at)}</td>
                         <td className="px-3 py-2 text-right tabular-nums">{lot.shares}</td>

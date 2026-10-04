@@ -10,7 +10,7 @@ export default async function Page() {
   return (
     <section className="space-y-4">
       <div>
-        <h1 className="text-2xl font-semibold">Opportunités du jour</h1>
+        <h1 className="font-display text-2xl font-extrabold tracking-tight md:text-3xl">Opportunités du jour</h1>
         <p className="text-sm opacity-70">
           Le screener tourne chaque jour de bourse à 10 h 30 (New York). Les deals non traités expirent au passage
           suivant.
@@ -19,7 +19,7 @@ export default async function Page() {
       {deals === null ? (
         <ApiDown />
       ) : deals.length === 0 ? (
-        <p className="rounded-lg border border-black/10 p-4 text-sm opacity-70 dark:border-white/10">
+        <p className="rounded-2xl border border-line bg-surface p-4 text-sm opacity-70">
           Aucun deal en attente. Soit le screener n&apos;a rien trouvé, soit la limite d&apos;engagement est atteinte.
         </p>
       ) : (

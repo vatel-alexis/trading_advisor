@@ -17,7 +17,7 @@ const REASONS = [
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between gap-2">
-      <dt className="opacity-60">{label}</dt>
+      <dt className="text-muted">{label}</dt>
       <dd className="tabular-nums">{value}</dd>
     </div>
   );
@@ -50,10 +50,10 @@ export function OpportunityCard({ deal }: { deal: Opportunity }) {
   }
 
   return (
-    <article className="flex flex-col rounded-lg border border-black/10 p-4 dark:border-white/10">
+    <article className="flex flex-col rounded-2xl border border-line bg-surface p-4">
       <header className="mb-3 flex items-start justify-between gap-2">
         <div>
-          <div className="text-lg font-semibold">{deal.underlying}</div>
+          <div className="font-display text-lg font-bold">{deal.underlying}</div>
           <div className="text-xs opacity-60">
             {STRATEGY_LABEL[deal.strategy]} · {deal.sector ?? "secteur ?"} · cours {price(deal.underlying_price)}
           </div>
@@ -66,7 +66,7 @@ export function OpportunityCard({ deal }: { deal: Opportunity }) {
         </div>
       </header>
 
-      <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-[13px] sm:text-sm">
         <Row label="Delta" value={deal.delta.toFixed(2)} />
         <Row label="PoP" value={pct(deal.pop)} />
         <Row label="Rendement / risque" value={pct(deal.ror)} />
@@ -89,18 +89,18 @@ export function OpportunityCard({ deal }: { deal: Opportunity }) {
 
       <div className="mt-auto pt-4">
         {result?.ok ? (
-          <p className="text-sm text-emerald-600 dark:text-emerald-400">{result.message}</p>
+          <p className="text-sm text-success">{result.message}</p>
         ) : mode === "idle" ? (
           <div className="flex gap-2">
             <button
               onClick={() => setMode("accept")}
-              className="flex-1 rounded bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700"
+              className="flex-1 rounded-full bg-success px-4 py-2.5 text-sm font-medium text-on-success hover:brightness-110"
             >
               Accepter
             </button>
             <button
               onClick={() => setMode("reject")}
-              className="flex-1 rounded bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700"
+              className="flex-1 rounded-full bg-danger px-4 py-2.5 text-sm font-medium text-on-danger hover:brightness-110"
             >
               Rejeter
             </button>
@@ -113,7 +113,7 @@ export function OpportunityCard({ deal }: { deal: Opportunity }) {
                 value={limit}
                 onChange={(e) => setLimit(e.target.value)}
                 inputMode="decimal"
-                className="w-24 rounded border border-black/20 bg-transparent px-2 py-1 text-right tabular-nums dark:border-white/20"
+                className="w-24 rounded-lg border border-line-strong bg-background px-2.5 py-1.5 text-right tabular-nums"
               />
             </label>
             <p className="text-xs opacity-60">
@@ -127,14 +127,14 @@ export function OpportunityCard({ deal }: { deal: Opportunity }) {
                 onClick={() =>
                   submit((k) => acceptOpportunity(deal.id, k, limitValue === deal.credit ? null : limitValue))
                 }
-                className="flex-1 rounded bg-emerald-600 px-3 py-2 font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                className="flex-1 rounded-full bg-success px-4 py-2.5 font-medium text-on-success hover:brightness-110 disabled:opacity-50"
               >
                 {pending ? "Envoi…" : "Confirmer l'ordre"}
               </button>
               <button
                 disabled={pending}
                 onClick={() => setMode("idle")}
-                className="rounded border border-black/20 px-3 py-2 dark:border-white/20"
+                className="rounded-full border border-line-strong px-3 hover:border-accent py-2"
               >
                 Annuler
               </button>
@@ -145,7 +145,7 @@ export function OpportunityCard({ deal }: { deal: Opportunity }) {
             <select
               value={reason}
               onChange={(e) => setReason(e.target.value)}
-              className="w-full rounded border border-black/20 bg-transparent px-2 py-1 dark:border-white/20"
+              className="w-full rounded-lg border border-line-strong bg-background px-2.5 py-1.5"
             >
               {REASONS.map((r) => (
                 <option key={r.value} value={r.value}>
@@ -158,27 +158,27 @@ export function OpportunityCard({ deal }: { deal: Opportunity }) {
               onChange={(e) => setNote(e.target.value)}
               maxLength={500}
               placeholder="Note (facultatif)"
-              className="w-full rounded border border-black/20 bg-transparent px-2 py-1 dark:border-white/20"
+              className="w-full rounded-lg border border-line-strong bg-background px-2.5 py-1.5"
             />
             <div className="flex gap-2">
               <button
                 disabled={pending}
                 onClick={() => submit((k) => rejectOpportunity(deal.id, k, reason, note))}
-                className="flex-1 rounded bg-red-600 px-3 py-2 font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                className="flex-1 rounded-full bg-danger px-4 py-2.5 font-medium text-on-danger hover:brightness-110 disabled:opacity-50"
               >
                 {pending ? "Envoi…" : "Confirmer le rejet"}
               </button>
               <button
                 disabled={pending}
                 onClick={() => setMode("idle")}
-                className="rounded border border-black/20 px-3 py-2 dark:border-white/20"
+                className="rounded-full border border-line-strong px-3 hover:border-accent py-2"
               >
                 Annuler
               </button>
             </div>
           </div>
         )}
-        {result && !result.ok ? <p className="mt-2 text-sm text-red-600">{result.message}</p> : null}
+        {result && !result.ok ? <p className="mt-2 text-sm text-danger">{result.message}</p> : null}
       </div>
     </article>
   );

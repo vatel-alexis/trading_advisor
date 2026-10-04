@@ -12,7 +12,7 @@ export function CloseButton({ id }: { id: number }) {
   const [key, setKey] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
-  if (result?.ok) return <span className="text-xs text-emerald-600 dark:text-emerald-400">{result.message}</span>;
+  if (result?.ok) return <span className="text-xs text-success">{result.message}</span>;
 
   function submit() {
     const k = key ?? newKey();
@@ -34,14 +34,14 @@ export function CloseButton({ id }: { id: number }) {
           <button
             disabled={pending}
             onClick={submit}
-            className="rounded bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+            className="rounded-full bg-danger px-3 py-1.5 text-xs font-medium text-on-danger hover:brightness-110 disabled:opacity-50"
           >
             {pending ? "Envoi…" : "Confirmer le rachat"}
           </button>
           <button
             disabled={pending}
             onClick={() => setConfirming(false)}
-            className="rounded border border-black/20 px-2 py-1 text-xs dark:border-white/20"
+            className="rounded-full border border-line-strong px-3 hover:border-accent py-1.5 text-xs"
           >
             Non
           </button>
@@ -49,12 +49,12 @@ export function CloseButton({ id }: { id: number }) {
       ) : (
         <button
           onClick={() => setConfirming(true)}
-          className="rounded border border-black/20 px-2 py-1 text-xs font-medium hover:bg-black/5 dark:border-white/20 dark:hover:bg-white/10"
+          className="rounded-full border border-line-strong px-3 hover:border-accent py-1.5 text-xs font-medium hover:bg-surface-2"
         >
           Racheter
         </button>
       )}
-      {result && !result.ok ? <span className="max-w-48 text-right text-xs text-red-600">{result.message}</span> : null}
+      {result && !result.ok ? <span className="max-w-48 text-right text-xs text-danger">{result.message}</span> : null}
     </div>
   );
 }

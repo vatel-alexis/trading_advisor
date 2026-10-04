@@ -6,7 +6,7 @@ import { useState, useTransition } from "react";
 import { deleteBacktest, launchBacktest } from "@/app/actions";
 import type { ActionResult, Backtests, Profile } from "@/lib/api";
 
-const INPUT = "rounded border border-black/20 bg-transparent px-2 py-1 dark:border-white/20";
+const INPUT = "rounded-lg border border-line-strong bg-background px-2.5 py-1.5";
 
 export function BacktestLauncher({
   profiles,
@@ -56,9 +56,9 @@ export function BacktestLauncher({
   }
 
   return (
-    <div className="space-y-3 rounded-lg border border-black/10 p-4 text-sm dark:border-white/10">
+    <div className="space-y-3 rounded-2xl border border-line bg-surface p-4 text-sm">
       <div className="flex flex-wrap items-end gap-3">
-        <label className="flex flex-col gap-1">
+        <label className="flex min-w-[40%] flex-1 flex-col gap-1 sm:min-w-0 sm:flex-none">
           <span className="text-xs opacity-60">Profil</span>
           <select value={profileId ?? ""} onChange={(e) => setProfileId(Number(e.target.value))} className={INPUT}>
             {profiles.map((p) => (
@@ -69,7 +69,7 @@ export function BacktestLauncher({
             ))}
           </select>
         </label>
-        <label className="flex flex-col gap-1">
+        <label className="flex min-w-[40%] flex-1 flex-col gap-1 sm:min-w-0 sm:flex-none">
           <span className="text-xs opacity-60">Du</span>
           <input
             type="date"
@@ -79,11 +79,11 @@ export function BacktestLauncher({
             className={INPUT}
           />
         </label>
-        <label className="flex flex-col gap-1">
+        <label className="flex min-w-[40%] flex-1 flex-col gap-1 sm:min-w-0 sm:flex-none">
           <span className="text-xs opacity-60">Au</span>
           <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} className={INPUT} />
         </label>
-        <label className="flex flex-col gap-1">
+        <label className="flex min-w-[40%] flex-1 flex-col gap-1 sm:min-w-0 sm:flex-none">
           <span className="text-xs opacity-60">Capital ($)</span>
           <input
             type="number"
@@ -101,7 +101,7 @@ export function BacktestLauncher({
         <button
           disabled={pending || profileId == null}
           onClick={submit}
-          className="rounded bg-foreground px-3 py-1.5 font-medium text-background disabled:opacity-40"
+          className="rounded-full bg-grad px-4 py-1.5 font-medium text-on-accent disabled:opacity-40"
         >
           {pending ? "Envoi…" : "Lancer le backtest"}
         </button>
@@ -134,7 +134,7 @@ export function BacktestLauncher({
         </p>
       ) : null}
       {result ? (
-        <p className={result.ok ? "text-emerald-600 dark:text-emerald-400" : "text-red-600"}>{result.message}</p>
+        <p className={result.ok ? "text-success" : "text-danger"}>{result.message}</p>
       ) : null}
     </div>
   );
@@ -157,11 +157,11 @@ export function DeleteRunButton({ id }: { id: number }) {
             else setError(r.message);
           });
         }}
-        className="text-xs underline underline-offset-4 opacity-60 hover:opacity-100 disabled:opacity-30"
+        className="text-xs text-accent underline decoration-accent/40 underline-offset-4 opacity-60 hover:opacity-100 disabled:opacity-30"
       >
         Supprimer
       </button>
-      {error ? <span className="text-xs text-red-600">{error}</span> : null}
+      {error ? <span className="text-xs text-danger">{error}</span> : null}
     </span>
   );
 }

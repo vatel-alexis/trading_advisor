@@ -98,7 +98,7 @@ export function ProfileEditor({
       </div>
 
       {groups.map((group) => (
-        <fieldset key={group.key} className="rounded-lg border border-black/10 p-4 dark:border-white/10">
+        <fieldset key={group.key} className="rounded-2xl border border-line bg-surface p-4">
           <legend className="px-1 text-sm font-semibold">{group.label}</legend>
           <div className="grid gap-x-6 gap-y-3 md:grid-cols-2">
             {fields
@@ -118,7 +118,7 @@ export function ProfileEditor({
         </fieldset>
       ))}
 
-      <div className="sticky bottom-0 space-y-2 rounded-lg border border-black/10 bg-background p-3 shadow-sm dark:border-white/10">
+      <div className="sticky bottom-0 space-y-2 rounded-2xl border border-line bg-surface/95 p-3 shadow-lg backdrop-blur">
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <button
             disabled={pending || !dirty}
@@ -154,7 +154,7 @@ export function ProfileEditor({
             Lancer un backtest
           </button>
           {profile.is_active ? (
-            <span className="rounded bg-emerald-500/15 px-2 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-400">
+            <span className="rounded-full border border-success/40 bg-success/10 px-2 py-1 text-xs font-medium text-success">
               Utilisé par le screener
             </span>
           ) : (
@@ -199,7 +199,7 @@ export function ProfileEditor({
                   );
                 }
               }}
-              className={`${LINK} text-red-600`}
+              className={`${LINK} text-danger`}
             >
               Supprimer
             </button>
@@ -228,10 +228,10 @@ export function ProfileEditor({
           >
             Enregistrer comme nouveau profil
           </button>
-          {dirty ? <span className="text-xs text-amber-600">Modifications non enregistrées</span> : null}
+          {dirty ? <span className="text-xs text-warning">Modifications non enregistrées</span> : null}
         </div>
         {result ? (
-          <p className={`text-sm ${result.ok ? "text-emerald-600 dark:text-emerald-400" : "text-red-600"}`}>
+          <p className={`text-sm ${result.ok ? "text-success" : "text-danger"}`}>
             {pending ? "…" : result.message}
           </p>
         ) : null}
@@ -246,11 +246,11 @@ export function ProfileEditor({
   );
 }
 
-const INPUT = "rounded border border-black/20 bg-transparent px-2 py-1 dark:border-white/20 disabled:opacity-40";
-const PRIMARY = "rounded bg-foreground px-3 py-1.5 font-medium text-background disabled:opacity-40";
+const INPUT = "rounded-lg border border-line-strong bg-background px-2.5 py-1.5 disabled:opacity-40";
+const PRIMARY = "rounded-full bg-grad px-4 py-1.5 font-medium text-on-accent disabled:opacity-40";
 const SECONDARY =
-  "rounded border border-black/20 px-3 py-1.5 font-medium hover:bg-black/5 disabled:opacity-40 dark:border-white/20 dark:hover:bg-white/10";
-const LINK = "px-1 py-1.5 underline underline-offset-4 opacity-70 hover:opacity-100 disabled:opacity-30";
+  "rounded-full border border-line-strong px-3 hover:border-accent py-1.5 font-medium hover:bg-surface-2 disabled:opacity-40";
+const LINK = "px-1 py-1.5 text-accent underline decoration-accent/40 underline-offset-4 opacity-70 hover:opacity-100 disabled:opacity-30";
 
 function FieldInput({
   field,
@@ -269,7 +269,7 @@ function FieldInput({
 }) {
   const differs = value !== defaultValue;
   const hint = field.help ? <span className="text-xs opacity-60">{field.help}</span> : null;
-  const marker = changed ? "border-l-2 border-amber-500 pl-2" : "border-l-2 border-transparent pl-2";
+  const marker = changed ? "border-l-2 border-warning pl-2" : "border-l-2 border-transparent pl-2";
 
   if (field.kind === "bool") {
     return (

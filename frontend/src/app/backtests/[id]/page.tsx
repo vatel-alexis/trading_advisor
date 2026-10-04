@@ -48,7 +48,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   if (!run) {
     return (
       <section className="space-y-4">
-        <h1 className="text-2xl font-semibold">Backtest</h1>
+        <h1 className="font-display text-2xl font-extrabold tracking-tight md:text-3xl">Backtest</h1>
         <ApiDown />
       </section>
     );
@@ -67,10 +67,10 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
       {busy ? <AutoRefresh seconds={3} /> : null}
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <Link href="/backtests" className="text-xs underline underline-offset-4 opacity-60">
+          <Link href="/backtests" className="text-xs text-accent underline decoration-accent/40 underline-offset-4 opacity-60">
             Tous les backtests
           </Link>
-          <h1 className="text-2xl font-semibold">
+          <h1 className="font-display text-2xl font-extrabold tracking-tight md:text-3xl">
             Backtest n° {run.id} : {run.profile_name}
           </h1>
           <p className="text-sm opacity-70">
@@ -83,7 +83,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
       </div>
 
       {run.status === "failed" ? (
-        <p className="rounded-lg border border-red-500/30 bg-red-500/5 p-4 text-sm text-red-600">{run.error}</p>
+        <p className="rounded-2xl border border-danger/40 bg-danger/10 p-4 text-sm text-danger">{run.error}</p>
       ) : null}
       {busy ? (
         <p className="text-sm opacity-70">
@@ -119,7 +119,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
             />
           </div>
 
-          <div className="rounded-lg border border-black/10 p-4 dark:border-white/10">
+          <div className="rounded-2xl border border-line bg-surface p-4">
             <h2 className="mb-2 text-sm font-semibold">Valeur du compte</h2>
             <EquityLines
               capital={run.capital}
@@ -144,11 +144,11 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
               <h2 className="text-sm font-semibold">Par année civile</h2>
-              <div className="overflow-x-auto rounded-lg border border-black/10 dark:border-white/10">
+              <div className="overflow-x-auto rounded-2xl border border-line bg-surface">
                 <table className="w-full text-sm">
                   <tbody>
                     {r.yearly.map((y) => (
-                      <tr key={y.year} className="border-t border-black/5 first:border-0 dark:border-white/5">
+                      <tr key={y.year} className="border-t border-line/70 first:border-0">
                         <td className="px-2 py-1">{y.year}</td>
                         <td className={`px-2 py-1 text-right tabular-nums ${pnlClass(y.return)}`}>{pct(y.return)}</td>
                       </tr>
@@ -159,11 +159,11 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
             </div>
             <div className="space-y-2">
               <h2 className="text-sm font-semibold">Entonnoir du screener (contrats restants, cumulés)</h2>
-              <div className="overflow-x-auto rounded-lg border border-black/10 dark:border-white/10">
+              <div className="overflow-x-auto rounded-2xl border border-line bg-surface">
                 <table className="w-full text-sm">
                   <tbody>
                     {funnel.map(([k, v]) => (
-                      <tr key={k} className="border-t border-black/5 first:border-0 dark:border-white/5">
+                      <tr key={k} className="border-t border-line/70 first:border-0">
                         <td className="px-2 py-1">{FUNNEL_LABEL[k]}</td>
                         <td className="px-2 py-1 text-right tabular-nums">{v.toLocaleString("fr-FR")}</td>
                       </tr>
@@ -189,7 +189,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
         </>
       ) : null}
 
-      <div className="space-y-2 rounded-lg border border-black/10 p-4 dark:border-white/10">
+      <div className="space-y-2 rounded-2xl border border-line bg-surface p-4">
         <h2 className="text-sm font-semibold">Réglages utilisés</h2>
         {changed.length === 0 ? (
           <p className="text-sm opacity-70">Valeurs par défaut.</p>
@@ -220,9 +220,9 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
             Trades ({r.trades.length}
             {r.trades.length > TRADES_SHOWN ? `, les ${TRADES_SHOWN} derniers affichés` : ""})
           </summary>
-          <div className="mt-2 overflow-x-auto rounded-lg border border-black/10 dark:border-white/10">
+          <div className="mt-2 overflow-x-auto rounded-2xl border border-line bg-surface">
             <table className="w-full text-xs">
-              <thead className="bg-black/5 text-left uppercase tracking-wide opacity-70 dark:bg-white/5">
+              <thead className="bg-surface-2 text-left font-mono uppercase tracking-[0.12em] text-muted">
                 <tr>
                   <th className="px-2 py-1.5">Entrée</th>
                   <th className="px-2 py-1.5">Titre</th>
@@ -242,7 +242,7 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
                   .map((t, i) => (
                     <tr
                       key={`${t.entry_day}-${t.underlying}-${i}`}
-                      className="border-t border-black/5 dark:border-white/5"
+                      className="border-t border-line/70"
                     >
                       <td className="px-2 py-1 whitespace-nowrap">{day(t.entry_day)}</td>
                       <td className="px-2 py-1">
