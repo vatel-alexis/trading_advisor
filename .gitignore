@@ -7,3 +7,5 @@ __pycache__/
 spike_results.csv
 node_modules/
 .next/
+.cache/
+backtest-out/
