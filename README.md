@@ -133,6 +133,26 @@ python -m scripts.broker_check                 # lecture seule
 python -m scripts.broker_check --probe-orders  # + 4 ordres impossibles à exécuter, annulés aussitôt
 ```
 
+## Interface (étape 4)
+
+| Page | Contenu |
+| --- | --- |
+| Tableau de bord | Capital (départ + P&L réalisé), disponible, immobilisé, marge restante sous la limite de 50 %, P&L réalisé et latent, deals à traiter |
+| Opportunités | Une carte par deal du jour : strikes, échéance, delta, PoP, rendement/risque, AROC, IV Rank, capital requis, poids dans le compte, gain visé à 50 %, stop et date de sortie. *Accepter* demande une confirmation (crédit limite modifiable), *Rejeter* demande un motif et une note facultative |
+| Positions | Positions ouvertes et ordres en attente : crédit d'entrée, dernier mark, P&L latent, % du crédit capturé, état de l'ordre de sortie, bouton *Racheter*. Actions détenues par la wheel. Rafraîchie toutes les 30 secondes |
+| Historique | Positions fermées, expirées, assignées ou jamais exécutées, et deals rejetés ou non traités ; filtres par statut, titre, stratégie et période |
+
+Le navigateur ne parle qu'au serveur Next.js : les clics passent par des *server actions* qui
+appellent l'API. Chaque clic génère une clé d'idempotence, gardée en cas de nouvel essai.
+
+**Rachat manuel** (`POST /positions/{id}/close`). Même chemin qu'un stop : l'ordre GTC de prise
+de profit est annulé et confirmé, puis la position est rachetée au prix naturel par un ordre
+limite *day*. Refusé marché fermé ou sans cotation. Si l'ordre n'est pas exécuté dans la journée,
+l'ordre de prise de profit est replacé.
+
+Routes de lecture : `GET /dashboard`, `GET /opportunities?status=proposed`, `GET /positions`,
+`GET /history?kind=closed&kind=rejected&underlying=SPY&strategy=put_credit_spread&since=2026-10-01`.
+
 ## Garde-fou paper
 
 `BROKER_ENV` n'accepte que `paper`, et les URL du broker sont fixées dans le code sur les

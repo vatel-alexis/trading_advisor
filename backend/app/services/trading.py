@@ -318,6 +318,8 @@ def submit_order(session: Session, broker: Broker, order: Order) -> None:
         )
         if order.purpose == OrderPurpose.OPEN:
             _never_opened(order.position)
+        elif order.purpose == OrderPurpose.MANUAL_CLOSE:
+            _restore_target(session, broker, order.position)
         return
     order.broker_order_id = result.id
     order.submitted_at = _now()
@@ -352,6 +354,8 @@ def apply_broker_order(session: Session, broker: Broker, order: Order, result: B
             _never_opened(position)
     elif result.filled_quantity > 0 and position.status == PositionStatus.OPEN:
         _closed(session, broker, order, result)
+    if order.purpose == OrderPurpose.MANUAL_CLOSE:
+        _restore_target(session, broker, position)
 
 
 def _fill_price(order: Order, result: BrokerOrder) -> float:
@@ -555,6 +559,71 @@ def _act_on_exit(
     order = _new_order(position, EXIT_PURPOSE[reason], limit, time_in_force)
     session.flush()
     submit_order(session, broker, order)
+
+
+# --- manual buy-back ------------------------------------------------------------------------
+
+
+def close_position(
+    session: Session, broker: Broker, position_id: int, idempotency_key: str
+) -> Order:
+    """Buy an open option position back now, at the natural price (the user's button).
+
+    Same path as a stop: the resting profit target is canceled and confirmed first, so both
+    can never fill. If the day order ends unfilled, the profit target is placed again.
+    """
+    key = f"ta-manual-{idempotency_key}"
+    existing = session.scalar(select(Order).where(Order.idempotency_key == key))
+    if existing is not None:
+        if existing.position_id != position_id:
+            raise DecisionError("Clé d'idempotence déjà utilisée pour une autre position.")
+        return existing
+
+    position = session.get(Position, position_id)
+    if position is None:
+        raise DecisionError("Position introuvable.", 404)
+    if position.status != PositionStatus.OPEN or position.strategy_type is None:
+        raise DecisionError("Seule une position d'options ouverte peut être rachetée.")
+    live = _live_orders(session, position)
+    if any(o.purpose != OrderPurpose.TAKE_PROFIT for o in live):
+        raise DecisionError("Un ordre de rachat est déjà en cours sur cette position.")
+    if not broker.market_is_open():
+        raise DecisionError("Marché fermé : le rachat manuel n'est possible qu'en séance.")
+    legs = _leg_sides(position)
+    quotes = broker.option_quotes([symbol for symbol, _ in legs])
+    natural = cost_to_close(legs, quotes, natural=True)
+    if natural is None:
+        raise DecisionError("Pas de cotation exploitable pour racheter cette position.", 503)
+    if not _cancel(session, broker, [o for o in live if o.purpose == OrderPurpose.TAKE_PROFIT]):
+        session.commit()
+        raise DecisionError("L'ordre de prise de profit n'est pas encore annulé, réessaie.")
+    if position.status != PositionStatus.OPEN:
+        session.commit()  # the profit target filled while it was being canceled
+        raise DecisionError("La position vient d'être clôturée par la prise de profit.")
+
+    order = _new_order(position, OrderPurpose.MANUAL_CLOSE, price_up(natural), "day")
+    order.idempotency_key = key
+    # Net quote of the buy-back: the far side (short legs at the bid) and the natural.
+    far = sum(quotes[sym].bid if side == Side.SELL else -quotes[sym].ask for sym, side in legs)
+    order.quote_bid = _dec(max(far, 0.0))
+    order.quote_ask = _dec(natural)
+    session.commit()
+    submit_order(session, broker, order)
+    session.commit()
+    return order
+
+
+def _restore_target(session: Session, broker: Broker, position: Position) -> None:
+    """Place the GTC profit target again after a manual buy-back that did not fill."""
+    if position.status != PositionStatus.OPEN or position.entry_credit is None:
+        return
+    if any(o.purpose == OrderPurpose.TAKE_PROFIT for o in _live_orders(session, position)):
+        return
+    target = take_profit_price(float(position.entry_credit), _params(session, position))
+    order = _new_order(position, OrderPurpose.TAKE_PROFIT, target, "gtc")
+    session.flush()
+    submit_order(session, broker, order)
+    _event(position, PositionEventType.TAKE_PROFIT_PLACED, price=target)
 
 
 # --- expiration and assignment (the wheel) --------------------------------------------------
