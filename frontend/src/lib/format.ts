@@ -1,4 +1,4 @@
-import type { Strategy } from "@/lib/api";
+import type { ParamField, ParamValue, Strategy } from "@/lib/api";
 
 const money = new Intl.NumberFormat("fr-FR", { style: "currency", currency: "USD" });
 const number2 = new Intl.NumberFormat("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -53,9 +53,9 @@ export const STRATEGY_LABEL: Record<Strategy | "shares", string> = {
 
 // Exit reasons of positions and reject reasons of proposals.
 export const REASON_LABEL: Record<string, string> = {
-  profit_target: "Objectif 50 %",
-  stop_loss: "Stop 2x",
-  time_exit: "Sortie 21 j",
+  profit_target: "Objectif de gain",
+  stop_loss: "Stop",
+  time_exit: "Sortie anticipée",
   manual: "Rachat manuel",
   expiration: "Expiration",
   assignment: "Assignation",
@@ -79,3 +79,18 @@ export function newKey() {
   if (typeof crypto.randomUUID === "function" && window.isSecureContext) return crypto.randomUUID();
   return Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
 }
+
+// A strategy parameter as shown in the settings and backtest pages.
+export function paramValue(field: ParamField | undefined, value: ParamValue | undefined): string {
+  if (value == null) return "—";
+  if (typeof value === "boolean") return value ? "oui" : "non";
+  if (Array.isArray(value)) return value.length ? value.join(", ") : "aucun";
+  if (field?.kind === "pct") return pct(value);
+  return String(value);
+}
+
+export const GROUP_LABEL: Record<string, string> = {
+  etf: "ETF",
+  large_cap: "Grandes valeurs",
+  wheel: "Wheel",
+};

@@ -1,8 +1,10 @@
 EXPECTED_TABLES = {
     "account_snapshots",
+    "backtest_runs",
     "decisions",
     "fills",
     "iv_history",
+    "market_history_cache",
     "opportunities",
     "opportunity_legs",
     "orders",
@@ -13,6 +15,7 @@ EXPECTED_TABLES = {
     "screener_runs",
     "shadow_outcomes",
     "strategy_configs",
+    "strategy_profiles",
 }
 
 

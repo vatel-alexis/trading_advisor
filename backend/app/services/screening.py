@@ -1,9 +1,11 @@
 """Daily screener run: market data in, screener_runs, opportunities and iv_history out."""
 
 import logging
+from collections import Counter
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -35,6 +37,7 @@ from app.models.enums import (
 logger = logging.getLogger(__name__)
 
 ACTIVE = (PositionStatus.PENDING, PositionStatus.OPEN)
+MARKET_TZ = ZoneInfo("America/New_York")
 
 
 class SnapshotProvider(Protocol):
@@ -100,6 +103,29 @@ def open_underlyings(session: Session) -> set[str]:
     )
 
 
+def open_sectors(session: Session) -> Counter:
+    rows = session.scalars(
+        select(Position.sector).where(Position.status.in_(ACTIVE), Position.sector.is_not(None))
+    ).all()
+    return Counter(rows)
+
+
+def cooling_down(session: Session, today: date, days: int) -> set[str]:
+    """Underlyings whose last position closed less than `days` market days ago (calendar)."""
+    if days <= 0:
+        return set()
+    rows = session.execute(
+        select(Position.underlying, func.max(Position.closed_at))
+        .where(Position.closed_at.is_not(None))
+        .group_by(Position.underlying)
+    ).all()
+    return {
+        underlying
+        for underlying, closed_at in rows
+        if (today - closed_at.astimezone(MARKET_TZ).date()).days < days
+    }
+
+
 def iv_history(session: Session, today: date) -> dict[str, list[float]]:
     rows = session.execute(
         select(IvHistory.underlying, IvHistory.iv30)
@@ -144,9 +170,19 @@ def _opportunity(
         "hv30": c.hv30,
         "iv_rank_method": c.iv_rank.method if c.iv_rank else None,
         "iv_rank_days": c.iv_rank.days if c.iv_rank else None,
-        "take_profit_price": take_profit_price(c.credit, params),
-        "stop_price": None if c.strategy == "covered_call" else stop_price(c.credit, params),
-        "time_exit_date": (c.expiration - timedelta(days=params.exit_dte)).isoformat(),
+        "take_profit_price": (
+            take_profit_price(c.credit, params) if params.use_take_profit else None
+        ),
+        "stop_price": (
+            stop_price(c.credit, params)
+            if params.use_stop_loss and c.strategy != "covered_call"
+            else None
+        ),
+        "time_exit_date": (
+            (c.expiration - timedelta(days=params.exit_dte)).isoformat()
+            if params.use_time_exit
+            else None
+        ),
     }
     return Opportunity(
         screener_run_id=run.id,
@@ -222,6 +258,8 @@ def run_screener(
         iv_history(session, today),
         lots,
         open_underlyings(session),
+        open_sectors(session),
+        cooling_down(session, today, params.reentry_cooldown_days),
     )
 
     session.execute(
