@@ -19,6 +19,34 @@ export type Dashboard = {
   pending_positions: number;
   proposed_opportunities: number;
   last_screener_run: string | null;
+  analytics: Analytics;
+};
+
+export type WinStats = {
+  trades: number;
+  wins: number;
+  losses: number;
+  win_rate: number | null;
+  realized_pnl: number;
+  avg_win: number | null;
+  avg_loss: number | null;
+  profit_factor: number | null;
+};
+
+export type CurvePoint = { date: string; pnl: number; cumulative: number; equity: number };
+
+export type MonthRow = { month: string; premium: number; realized_pnl: number; trades: number };
+
+// Realized basis: finished trades only; the unrealized P&L stays on the dashboard's own tile.
+export type Analytics = WinStats & {
+  premium_collected: number;
+  premium_this_month: number;
+  max_drawdown: number;
+  max_drawdown_pct: number;
+  curve: CurvePoint[];
+  months: MonthRow[];
+  by_strategy: (WinStats & { strategy: Strategy | "shares" })[];
+  exit_reasons: Record<string, number>;
 };
 
 export type OpportunityLeg = {

@@ -21,6 +21,11 @@ export const pnlClass = (value: number | null | undefined) =>
       ? "text-emerald-600 dark:text-emerald-400"
       : "text-red-600 dark:text-red-400";
 
+// "2026-10" -> "oct. 2026".
+export function month(value: string) {
+  return new Date(`${value}-15T12:00:00`).toLocaleDateString("fr-FR", { month: "short", year: "numeric" });
+}
+
 export function day(value: string | null | undefined) {
   if (!value) return "—";
   // Dates without a time are calendar days: no time zone shift.
@@ -44,6 +49,22 @@ export const STRATEGY_LABEL: Record<Strategy | "shares", string> = {
   cash_secured_put: "Cash secured put",
   covered_call: "Covered call",
   shares: "Actions (wheel)",
+};
+
+// Exit reasons of positions and reject reasons of proposals.
+export const REASON_LABEL: Record<string, string> = {
+  profit_target: "Objectif 50 %",
+  stop_loss: "Stop 2x",
+  time_exit: "Sortie 21 j",
+  manual: "Rachat manuel",
+  expiration: "Expiration",
+  assignment: "Assignation",
+  called_away: "Actions appelées",
+  premium_too_low: "Prime trop faible",
+  sector_concentration: "Concentration sectorielle",
+  no_conviction: "Pas de conviction",
+  news: "Actualité",
+  other: "Autre",
 };
 
 export const strikes = (values: (number | null)[]) =>

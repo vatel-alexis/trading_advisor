@@ -3,6 +3,10 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  /* Charts: one series hue, recessive grid and baseline. */
+  --series-1: #2a78d6;
+  --chart-grid: rgb(0 0 0 / 0.08);
+  --chart-axis: rgb(0 0 0 / 0.35);
 }
 
 @theme inline {
@@ -14,6 +18,9 @@
   :root {
     --background: #0a0a0a;
     --foreground: #ededed;
+    --series-1: #3987e5;
+    --chart-grid: rgb(255 255 255 / 0.1);
+    --chart-axis: rgb(255 255 255 / 0.4);
   }
 }
 

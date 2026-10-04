@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import { ApiDown } from "@/components/Stat";
 import { getHistory, type HistoryKind } from "@/lib/api";
-import { STRATEGY_LABEL, day, pnlClass, price, signed, strikes } from "@/lib/format";
+import { REASON_LABEL, STRATEGY_LABEL, day, pnlClass, price, signed, strikes } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -15,21 +15,6 @@ const KINDS: { value: HistoryKind; label: string }[] = [
   { value: "ignored", label: "Non traitée" },
 ];
 const KIND_LABEL = Object.fromEntries(KINDS.map((k) => [k.value, k.label])) as Record<HistoryKind, string>;
-
-const REASON_LABEL: Record<string, string> = {
-  profit_target: "Objectif 50 %",
-  stop_loss: "Stop 2x",
-  time_exit: "Sortie 21 j",
-  manual: "Rachat manuel",
-  expiration: "Expiration",
-  assignment: "Assignation",
-  called_away: "Actions appelées",
-  premium_too_low: "Prime trop faible",
-  sector_concentration: "Concentration sectorielle",
-  no_conviction: "Pas de conviction",
-  news: "Actualité",
-  other: "Autre",
-};
 
 type Search = Record<string, string | string[] | undefined>;
 
