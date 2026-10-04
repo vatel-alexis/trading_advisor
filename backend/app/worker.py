@@ -2,14 +2,25 @@
 
 Jobs are registered here as sprints land: daily screener (~10:30 ET), position monitor
 (every 5 min on weekdays: order sync, assignments, exits), then end-of-day snapshots.
+
+    python -m app.worker            # the scheduler (what the compose `worker` service runs)
+    python -m app.worker check      # preflight: database, broker, Yahoo, next runs
+    python -m app.worker screener   # one screener run now (e.g. stack started after 10:30)
+    python -m app.worker monitor    # one monitor pass now
 """
 
+import argparse
 import logging
+import os
+import sys
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from apscheduler.executors.pool import ProcessPoolExecutor
 from apscheduler.schedulers.blocking import BlockingScheduler
+from sqlalchemy import text
 
 from app.broker.alpaca import AlpacaBroker
 from app.config import get_settings
@@ -21,6 +32,7 @@ from app.services.screening import active_config, run_screener
 from app.services.trading import monitor
 
 MARKET_TZ = "America/New_York"
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 logger = logging.getLogger("worker")
 
@@ -78,9 +90,71 @@ def build_scheduler() -> BlockingScheduler:
     return scheduler
 
 
-if __name__ == "__main__":
+def check() -> bool:
+    """Print one line per dependency of the trading day; False if any is not ready."""
+    settings = get_settings()
+    now = datetime.now(ZoneInfo(MARKET_TZ))
+    results: list[bool] = []
+
+    def line(name: str, good: bool, detail: str) -> None:
+        results.append(good)
+        print(f"[{'ok' if good else 'KO'}] {name:<8} {detail}")
+
+    try:
+        with SessionLocal() as session:
+            current = session.execute(text("SELECT version_num FROM alembic_version")).scalar()
+        config = Config(os.path.join(BACKEND_DIR, "alembic.ini"))
+        config.set_main_option("script_location", os.path.join(BACKEND_DIR, "migrations"))
+        head = ScriptDirectory.from_config(config).get_current_head()
+        line("base", current == head, f"migration {current} (dernière : {head})")
+    except Exception as exc:
+        line("base", False, f"injoignable ou non migrée : {str(exc)[:200]}")
+
+    try:
+        broker = AlpacaBroker.from_settings(settings)
+        account = broker._call("GET", "/v2/account")
+        clock = broker._call("GET", "/v2/clock")
+        level = int(account.get("options_trading_level") or 0)
+        line(
+            "broker",
+            account.get("status") == "ACTIVE" and level >= 3,
+            f"{settings.broker} {settings.broker_env}, compte {account.get('status')}, "
+            f"niveau options {level}, marché {'ouvert' if clock['is_open'] else 'fermé'}, "
+            f"prochaine ouverture {clock['next_open']}",
+        )
+    except Exception as exc:
+        line("broker", False, str(exc)[:200])
+
+    try:
+        params = StrategyParams()
+        spy = YahooProvider(params.dte_min, params.dte_max).snapshot("SPY", now.date())
+        line("yahoo", bool(spy.options), f"SPY {spy.spot:.2f}, {len(spy.options)} options")
+    except Exception as exc:
+        line("yahoo", False, str(exc)[:200])
+
+    for job in build_scheduler().get_jobs():
+        print(f"     {job.id:<17} prochain passage {job.trigger.get_next_fire_time(None, now)}")
+    return all(results)
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="python -m app.worker")
+    parser.add_argument("command", nargs="?", choices=["check", "screener", "monitor"])
+    command = parser.parse_args(argv).command
     logging.basicConfig(level=logging.INFO)
-    with SessionLocal() as session:
-        if interrupted := fail_interrupted(session):
-            logger.warning("%s backtest(s) interrompu(s) marqué(s) en échec", interrupted)
-    build_scheduler().start()
+    if command == "check":
+        return 0 if check() else 1
+    if command == "screener":
+        daily_screener()
+    elif command == "monitor":
+        position_monitor()
+    else:
+        with SessionLocal() as session:
+            if interrupted := fail_interrupted(session):
+                logger.warning("%s backtest(s) interrompu(s) marqué(s) en échec", interrupted)
+        build_scheduler().start()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
