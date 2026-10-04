@@ -272,7 +272,6 @@ def _new_order(
     quote_ask: float | None = None,
 ) -> Order:
     order = Order(
-        position=position,
         idempotency_key=f"ta-{purpose.value}-{position.id}-{uuid.uuid4().hex[:10]}",
         purpose=purpose,
         status=OrderStatus.NEW,
@@ -282,6 +281,9 @@ def _new_order(
         quote_bid=None if quote_bid is None else _dec(quote_bid),
         quote_ask=None if quote_ask is None else _dec(quote_ask),
     )
+    # Appended from the position's side: SQLAlchemy 2 no longer cascades a backref
+    # assignment into the session.
+    position.orders.append(order)
     return order
 
 
