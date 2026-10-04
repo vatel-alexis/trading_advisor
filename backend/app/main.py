@@ -1,7 +1,9 @@
+from datetime import date, datetime
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Literal
+from zoneinfo import ZoneInfo
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import text
@@ -12,8 +14,14 @@ from app.broker import Broker
 from app.broker.alpaca import AlpacaBroker
 from app.config import get_settings
 from app.db import get_session
-from app.models.enums import RejectReason
-from app.services.trading import DecisionError, accept_opportunity, reject_opportunity
+from app.models.enums import OpportunityStatus, RejectReason
+from app.services import views
+from app.services.trading import (
+    DecisionError,
+    accept_opportunity,
+    close_position,
+    reject_opportunity,
+)
 
 settings = get_settings()
 
@@ -43,6 +51,46 @@ def health(session: DbSession) -> dict[str, str]:
     except SQLAlchemyError:
         database = "indisponible"
     return {"status": "ok", "database": database, "broker_env": settings.broker_env}
+
+
+def market_today() -> date:
+    return datetime.now(ZoneInfo("America/New_York")).date()
+
+
+@app.get("/dashboard")
+def get_dashboard(session: DbSession) -> dict[str, object]:
+    return views.dashboard(session, settings.starting_capital)
+
+
+@app.get("/opportunities")
+def get_opportunities(
+    session: DbSession, status: OpportunityStatus | None = OpportunityStatus.PROPOSED
+) -> list[dict[str, object]]:
+    return views.opportunities(session, settings.starting_capital, status)
+
+
+@app.get("/positions")
+def get_positions(session: DbSession) -> dict[str, object]:
+    return views.positions(session, market_today())
+
+
+HistoryKind = Literal["closed", "expired", "assigned", "canceled", "rejected", "ignored"]
+HistoryStrategy = Literal["put_credit_spread", "cash_secured_put", "covered_call", "shares"]
+
+
+@app.get("/history")
+def get_history(
+    session: DbSession,
+    kind: Annotated[list[HistoryKind] | None, Query()] = None,
+    underlying: str | None = Query(default=None, max_length=16),
+    strategy: HistoryStrategy | None = None,
+    since: date | None = None,
+    until: date | None = None,
+) -> dict[str, object]:
+    rows = views.history(
+        session, views.HistoryFilter(tuple(kind or ()), underlying, strategy, since, until)
+    )
+    return {"rows": rows, "underlyings": views.history_underlyings(session)}
 
 
 class AcceptRequest(BaseModel):
@@ -91,3 +139,23 @@ def reject(opportunity_id: int, body: RejectRequest, session: DbSession) -> dict
     except DecisionError as exc:
         raise HTTPException(exc.status_code, str(exc)) from exc
     return {"decision_id": decision.id, "reason": body.reason.value}
+
+
+class CloseRequest(BaseModel):
+    idempotency_key: str = Field(min_length=8, max_length=48)
+
+
+@app.post("/positions/{position_id}/close")
+def close(
+    position_id: int, body: CloseRequest, session: DbSession, broker: BrokerDep
+) -> dict[str, object]:
+    try:
+        order = close_position(session, broker, position_id, body.idempotency_key)
+    except DecisionError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+    return {
+        "position_id": order.position_id,
+        "position_status": order.position.status.value,
+        "order_status": order.status.value,
+        "limit_price": float(order.limit_price) if order.limit_price else None,
+    }
