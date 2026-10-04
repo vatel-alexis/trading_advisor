@@ -1,10 +1,12 @@
+import hmac
 from datetime import date, datetime
 from functools import lru_cache
 from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -41,6 +43,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def require_api_token(request: Request, call_next):
+    """Once the API is reachable from the internet (API_TOKEN set), only the site may call it."""
+    token = settings.api_token
+    if token and request.url.path != "/health":
+        sent = request.headers.get("x-api-token", "")
+        if not hmac.compare_digest(sent.encode(), token.encode()):
+            return JSONResponse({"detail": "Jeton d'API manquant ou invalide."}, status_code=401)
+    return await call_next(request)
 
 
 @app.get("/health")

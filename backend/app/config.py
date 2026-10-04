@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     broker_api_secret: str = ""
     starting_capital: int = 20_000
     cors_origins: list[str] = ["http://localhost:3000"]
+    # Shared secret between the site and a publicly hosted API; empty = no check (local stack).
+    api_token: str = ""
 
     @field_validator("database_url")
     @classmethod

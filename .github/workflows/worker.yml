@@ -40,7 +40,7 @@ jobs:
         working-directory: .
         run: |
           if [ -z "$DATABASE_URL" ]; then
-            echo "::notice::Secret DATABASE_URL absent : rien à faire (voir docs/hebergement-github.md)."
+            echo "::notice::Secret DATABASE_URL absent : rien à faire (voir docs/hebergement-gratuit.md)."
             echo "ok=false" >> "$GITHUB_OUTPUT"
           else
             echo "ok=true" >> "$GITHUB_OUTPUT"
