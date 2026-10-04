@@ -1,0 +1,61 @@
+name: Worker
+
+# The worker without a server: every 5 minutes on weekdays, `tick` runs whatever is due (monitor
+# 08:00-17:55 New York time, screener from 10:30 once a day) against the hosted database.
+# Needs the repository secrets DATABASE_URL, BROKER_API_KEY and BROKER_API_SECRET; until
+# DATABASE_URL is set, every run stops at the first step. Schedules only run from main.
+on:
+  schedule:
+    # UTC, wide enough for both EDT and EST; `tick` checks New York time itself. Off the top of
+    # the hour, when GitHub delays scheduled runs the most.
+    - cron: "3-58/5 12-22 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "check = diagnostic, tick = ce qui est dû maintenant"
+        type: choice
+        options: [check, tick, screener, monitor]
+        default: check
+
+concurrency:
+  group: worker
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      BROKER: alpaca
+      BROKER_ENV: paper
+      BROKER_API_KEY: ${{ secrets.BROKER_API_KEY }}
+      BROKER_API_SECRET: ${{ secrets.BROKER_API_SECRET }}
+    steps:
+      - name: Hosted database configured?
+        id: configured
+        working-directory: .
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::notice::Secret DATABASE_URL absent : rien à faire (voir docs/hebergement-github.md)."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.configured.outputs.ok == 'true'
+        uses: actions/checkout@v4
+      - if: steps.configured.outputs.ok == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - if: steps.configured.outputs.ok == 'true'
+        run: pip install .
+      - if: steps.configured.outputs.ok == 'true'
+        run: alembic upgrade head
+      - if: steps.configured.outputs.ok == 'true'
+        run: python -m app.worker ${{ inputs.command || 'tick' }}

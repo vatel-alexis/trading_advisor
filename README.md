@@ -20,6 +20,8 @@ Compte simulé de 20 000, environnement broker démo uniquement.
 ## Démarrer avec Docker
 
 Guide complet (horaires, premier cycle paper, dépannage) : [docs/mise-en-service.md](docs/mise-en-service.md).
+Sans machine allumée, le worker peut tourner gratuitement sur GitHub Actions avec une base Neon :
+[docs/hebergement-github.md](docs/hebergement-github.md).
 
 ```bash
 cp .env.example .env
