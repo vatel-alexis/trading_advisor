@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -17,6 +18,7 @@ from app.models import (
     Opportunity,
     Order,
     Position,
+    PositionEvent,
     PositionLeg,
     PositionMark,
     ScreenerRun,
@@ -26,8 +28,10 @@ from app.models.enums import (
     InstrumentType,
     OpportunityStatus,
     OrderPurpose,
+    PositionEventType,
     PositionStatus,
     Side,
+    StrategyType,
 )
 from app.services.screening import ACTIVE, account_state, active_config
 from app.services.trading import LIVE
@@ -73,7 +77,9 @@ def _stock_leg(position: Position) -> PositionLeg | None:
 # --- dashboard ------------------------------------------------------------------------------
 
 
-def dashboard(session: Session, starting_capital: float) -> dict[str, Any]:
+def dashboard(
+    session: Session, starting_capital: float, today: date | None = None
+) -> dict[str, Any]:
     params = _params(session)
     account = account_state(session, starting_capital)
     open_ids = list(
@@ -111,6 +117,141 @@ def dashboard(session: Session, starting_capital: float) -> dict[str, Any]:
         "pending_positions": counts.get(PositionStatus.PENDING, 0),
         "proposed_opportunities": proposed or 0,
         "last_screener_run": _iso(last_run),
+        "analytics": analytics(session, starting_capital, today or datetime.now(MARKET_TZ).date()),
+    }
+
+
+# --- analytics ------------------------------------------------------------------------------
+
+MARKET_TZ = ZoneInfo("America/New_York")
+
+
+def _market_day(moment: datetime) -> date:
+    return moment.astimezone(MARKET_TZ).date()
+
+
+def _counts_as_trade(p: Position) -> bool:
+    """A finished trade for the win rate.
+
+    An assigned put is not one: its premium went into the shares' cost basis, so its outcome
+    is the share lot's, counted when the shares are called away.
+    """
+    if p.status == PositionStatus.CANCELED or p.realized_pnl is None:
+        return False
+    return not (
+        p.status == PositionStatus.ASSIGNED and p.strategy_type == StrategyType.CASH_SECURED_PUT
+    )
+
+
+def _win_stats(pnls: list[float]) -> dict[str, Any]:
+    wins = [x for x in pnls if x > 0]
+    losses = [x for x in pnls if x <= 0]
+    lost = -sum(losses)
+    return {
+        "trades": len(pnls),
+        "wins": len(wins),
+        "losses": len(losses),
+        "win_rate": round(len(wins) / len(pnls), 4) if pnls else None,
+        "realized_pnl": round(sum(pnls), 2),
+        "avg_win": round(sum(wins) / len(wins), 2) if wins else None,
+        "avg_loss": round(sum(losses) / len(losses), 2) if losses else None,
+        # Gross gains over gross losses; None while nothing was lost.
+        "profit_factor": round(sum(wins) / lost, 2) if lost > 0 else None,
+    }
+
+
+def analytics(session: Session, starting_capital: float, today: date) -> dict[str, Any]:
+    """Realized-basis performance: P&L curve, win rate, premiums collected.
+
+    Only finished positions count, except a partial close on a still open position, whose
+    realized part is added to the curve on today's date so it ends on the account's capital.
+    """
+    booked = session.scalars(select(Position).where(Position.realized_pnl.is_not(None))).all()
+    finished = [p for p in booked if p.status in FINISHED and p.closed_at is not None]
+
+    by_day: dict[date, float] = {}
+    for p in finished:
+        day = _market_day(p.closed_at)
+        by_day[day] = by_day.get(day, 0.0) + float(p.realized_pnl)
+    partial = sum(float(p.realized_pnl) for p in booked if p not in finished)
+    if partial:
+        by_day[today] = by_day.get(today, 0.0) + partial
+
+    curve = []
+    cumulative = 0.0
+    peak = float(starting_capital)
+    max_drawdown = 0.0
+    max_drawdown_pct = 0.0
+    for day in sorted(by_day):
+        cumulative += by_day[day]
+        equity = float(starting_capital) + cumulative
+        peak = max(peak, equity)
+        if peak - equity > max_drawdown:
+            max_drawdown = peak - equity
+            max_drawdown_pct = max_drawdown / peak
+        curve.append(
+            {
+                "date": day.isoformat(),
+                "pnl": round(by_day[day], 2),
+                "cumulative": round(cumulative, 2),
+                "equity": round(equity, 2),
+            }
+        )
+
+    trades = [p for p in finished if _counts_as_trade(p)]
+    strategies: dict[str, list[float]] = {}
+    exits: dict[str, int] = {}
+    months: dict[str, dict[str, float]] = {}
+
+    def month(key: str) -> dict[str, float]:
+        return months.setdefault(key, {"premium": 0.0, "realized_pnl": 0.0, "trades": 0})
+
+    for p in trades:
+        pnl = float(p.realized_pnl)
+        key = p.strategy_type.value if p.strategy_type else "shares"
+        strategies.setdefault(key, []).append(pnl)
+        reason = p.exit_reason.value if p.exit_reason else "other"
+        exits[reason] = exits.get(reason, 0) + 1
+        row = month(_market_day(p.closed_at).strftime("%Y-%m"))
+        row["realized_pnl"] += pnl
+        row["trades"] += 1
+
+    # Gross premium: every option sold, at its fill credit and filled size, in the month it
+    # opened, whatever happened next (an assigned put's premium lowers the shares' cost).
+    opened = session.execute(
+        select(PositionEvent.payload, PositionEvent.occurred_at)
+        .join(Position)
+        .where(
+            PositionEvent.type == PositionEventType.OPENED,
+            Position.strategy_type.is_not(None),
+        )
+    ).all()
+    for payload, occurred_at in opened:
+        payload = payload or {}
+        premium = float(payload.get("credit", 0)) * 100 * int(payload.get("contracts", 0))
+        month(_market_day(occurred_at).strftime("%Y-%m"))["premium"] += premium
+
+    this_month = today.strftime("%Y-%m")
+    return {
+        **_win_stats([float(p.realized_pnl) for p in trades]),
+        "premium_collected": round(sum(m["premium"] for m in months.values()), 2),
+        "premium_this_month": round(months.get(this_month, {}).get("premium", 0.0), 2),
+        "max_drawdown": round(max_drawdown, 2),
+        "max_drawdown_pct": round(max_drawdown_pct, 4),
+        "curve": curve,
+        "months": [
+            {
+                "month": key,
+                "premium": round(m["premium"], 2),
+                "realized_pnl": round(m["realized_pnl"], 2),
+                "trades": int(m["trades"]),
+            }
+            for key, m in sorted(months.items())
+        ],
+        "by_strategy": [
+            {"strategy": key, **_win_stats(pnls)} for key, pnls in sorted(strategies.items())
+        ],
+        "exit_reasons": dict(sorted(exits.items(), key=lambda item: -item[1])),
     }
 
 

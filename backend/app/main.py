@@ -59,7 +59,7 @@ def market_today() -> date:
 
 @app.get("/dashboard")
 def get_dashboard(session: DbSession) -> dict[str, object]:
-    return views.dashboard(session, settings.starting_capital)
+    return views.dashboard(session, settings.starting_capital, market_today())
 
 
 @app.get("/opportunities")
