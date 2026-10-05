@@ -7,7 +7,7 @@ import pytest
 
 from app.domain.exits import PROFIT_TARGET, STOP_LOSS, TIME_EXIT, ShortPremium, evaluate_exit
 from app.domain.params import PARAM_SPECS, InvalidParams, StrategyParams, parse_params
-from app.domain.risk import AccountState
+from app.domain.risk import AccountState, Exposure
 from app.domain.screener import screen, trend_ok
 from tests.chains import TODAY, make_snapshot
 
@@ -28,7 +28,7 @@ def test_every_field_has_a_spec_and_every_toggle_exists() -> None:
 def test_new_indicators_start_off_and_old_filters_on() -> None:
     assert not PARAMS.use_trend_filter and not PARAMS.use_iv_hv_filter
     assert PARAMS.use_iv_rank_filter and PARAMS.use_earnings_filter and PARAMS.use_stop_loss
-    assert not PARAMS.sector_limit_includes_open and PARAMS.reentry_cooldown_days == 0
+    assert PARAMS.use_sector_limit and PARAMS.reentry_cooldown_days == 0
 
 
 def test_disabled_group_leaves_the_universe() -> None:
@@ -96,8 +96,9 @@ def test_iv_rank_filter_off_lets_a_cheap_underlying_through() -> None:
 
 def test_earnings_filter_off_keeps_a_stock_reporting_before_expiration() -> None:
     snap = make_snapshot("AAPL", 300, 5, next_earnings=TODAY + timedelta(days=20))
-    assert screen([snap], TODAY, PARAMS, ACCOUNT).ranked == []
-    result = screen([snap], TODAY, replace(PARAMS, use_earnings_filter=False), ACCOUNT)
+    large = replace(PARAMS, enable_large_caps=True)
+    assert screen([snap], TODAY, large, ACCOUNT).ranked == []
+    result = screen([snap], TODAY, replace(large, use_earnings_filter=False), ACCOUNT)
     assert [c.underlying for c in result.ranked] == ["AAPL"]
 
 
@@ -127,14 +128,14 @@ def test_iv_hv_filter_needs_implied_above_realized() -> None:
     assert screen([snap], TODAY, strict, ACCOUNT).ranked == []
 
 
-def test_sector_limit_can_count_open_positions_or_be_off() -> None:
-    snaps = [make_snapshot(s, p, 5, sector=None) for s, p in [("SPY", 500), ("QQQ", 400)]]
-    open_etf = {"ETF": 1}
-    assert len(screen(snaps, TODAY, PARAMS, ACCOUNT, open_sectors=open_etf).selected) == 2
-    counted = replace(PARAMS, sector_limit_includes_open=True)
-    result = screen(snaps, TODAY, counted, ACCOUNT, open_sectors=open_etf)
+def test_sector_limit_counts_open_positions_or_can_be_off() -> None:
+    snaps = [make_snapshot(s, p, 1, sector=None) for s, p in [("SPY", 500), ("QQQ", 400)]]
+    assert len(screen(snaps, TODAY, PARAMS, ACCOUNT).selected) == 2
+    # An open IWM spread already uses one of the two ETF places.
+    iwm = Exposure("IWM", "ETF", "put_credit_spread", 150, 150, 150)
+    result = screen(snaps, TODAY, PARAMS, ACCOUNT, exposures=[iwm])
     assert len(result.selected) == 1 and "sector_limit" in result.skipped.values()
-    three = [*snaps, make_snapshot("IWM", 200, 5, sector=None)]
+    three = [*snaps, make_snapshot("IWM", 200, 1, sector=None)]
     assert len(screen(three, TODAY, replace(PARAMS, use_sector_limit=False), ACCOUNT).selected) == 3
 
 

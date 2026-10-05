@@ -33,6 +33,8 @@ class StrategyConfig(Timestamped, Base):
     profile_id: Mapped[int | None] = mapped_column(
         ForeignKey("strategy_profiles.id", ondelete="SET NULL")
     )
+    # How it was activated: the risk warnings shown and whether they were confirmed.
+    activation: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
 
 class ScreenerRun(Base):
@@ -65,6 +67,8 @@ class Opportunity(Timestamped, Base):
     credit: Mapped[Decimal]
     max_loss: Mapped[Decimal]
     collateral: Mapped[Decimal]
+    # Loss if the underlying gaps down by the stress move (total over the quantity).
+    stress_loss: Mapped[Decimal | None]
     breakeven: Mapped[Decimal]
     short_delta: Mapped[Decimal] = mapped_column(Ratio)
     pop: Mapped[Decimal] = mapped_column(Ratio)

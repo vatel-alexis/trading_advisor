@@ -39,16 +39,34 @@ HISTORY_START = date(2018, 10, 1)
 DEFAULT_START = date(2019, 1, 2)
 PROGRESS_SECONDS = 2.0
 
+# The first preset is the default one, linked to the active screener version on first use.
 PRESETS: tuple[tuple[str, str, dict[str, Any]], ...] = (
-    ("Actuel", "Réglages validés après le spike de données (valeurs par défaut).", {}),
     (
         "Prudent",
-        "ETF + wheel, entrée à 40-55 DTE, delta 0.10-0.20 : le meilleur scénario du backtest "
-        "2019-2026.",
-        {"enable_large_caps": False, "dte_min": 40, "dte_max": 55, "delta_min": 0.10,
-         "delta_max": 0.20},
+        "Profil par défaut : ETF + wheel, entrée à 40-55 DTE, delta 0.10-0.20, risque de 1 % du "
+        "capital par trade, 10 % de perte maximale ouverte, 5 % par cluster, stop mensuel 4 %.",
+        {},
+    ),
+    (
+        "Actuel",
+        "Anciens réglages par défaut, déficitaires au backtest 2019-2026 (-19,1 %/an, drawdown "
+        "86,9 %). Déconseillé : son activation demande une confirmation.",
+        {"enable_large_caps": True, "dte_min": 25, "dte_max": 55, "delta_min": 0.15,
+         "delta_max": 0.30, "spread_widths": [5.0, 10.0, 2.5], "min_credit": 0.25,
+         "max_trade_risk_pct": 0.10, "max_open_risk_pct": 0.50, "max_cluster_risk_pct": 0.50},
     ),
 )  # fmt: skip
+# Documented backtests of the presets, until a run of the profile exists.
+PRESET_REFERENCES: dict[str, dict[str, Any]] = {
+    "Actuel": {
+        "cagr": -0.191,
+        "max_drawdown": 0.869,
+        "profit_factor": 0.74,
+        "start": "2019-01-02",
+        "end": "2026-10-02",
+        "source": "Backtest 2019-2026 des anciens réglages par défaut (docs/backtest-resultats.md)",
+    }
+}
 
 # Reconstruction assumptions that can be changed per run, with their labels.
 MODEL_SPECS: tuple[tuple[str, str], ...] = (
@@ -115,22 +133,26 @@ def param_specs() -> dict[str, Any]:
 
 
 def ensure_profiles(session: Session) -> None:
-    """First use: the active parameters become the "Actuel" profile, plus the presets."""
+    """First use: the active parameters become the default profile, plus the other presets."""
     if session.scalar(select(func.count()).select_from(StrategyProfile)):
         return
     config = active_config(session)
-    for name, description, overrides in PRESETS:
+    for index, (name, description, overrides) in enumerate(PRESETS):
         params = (
             StrategyParams.from_dict(config.params)
-            if name == "Actuel"
+            if index == 0
             else StrategyParams.from_dict({**StrategyParams().to_dict(), **overrides})
         )
         profile = StrategyProfile(
-            name=name, description=description, params=params.to_dict(), updated_at=_now()
+            name=name,
+            description=description,
+            params=params.to_dict(),
+            updated_at=_now(),
+            reference_summary=PRESET_REFERENCES.get(name),
         )
         session.add(profile)
         session.flush()
-        if name == "Actuel" and config.profile_id is None:
+        if index == 0 and config.profile_id is None:
             config.profile_id = profile.id
     session.flush()
 
@@ -152,7 +174,66 @@ def _check_name(session: Session, name: str, profile_id: int | None = None) -> s
     return name
 
 
-def profile_view(profile: StrategyProfile, active_id: int | None) -> dict[str, Any]:
+def _same_params(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    return StrategyParams.from_dict(a).to_dict() == StrategyParams.from_dict(b).to_dict()
+
+
+def risk_verdict(session: Session, profile: StrategyProfile) -> dict[str, Any]:
+    """Backtest record of the profile's exact parameters, and whether activation must warn.
+
+    The latest finished run of the profile with the same parameters is used, else the
+    documented reference of a preset. A loss-making record or a drawdown above the profile's
+    own drawdown limit makes the activation warning blocking (explicit confirmation needed).
+    """
+    params = StrategyParams.from_dict(profile.params)
+    runs = session.scalars(
+        select(BacktestRun)
+        .options(defer(BacktestRun.result))
+        .where(BacktestRun.profile_id == profile.id, BacktestRun.status == DONE)
+        .order_by(BacktestRun.id.desc())
+    ).all()
+    run = next((r for r in runs if r.summary and _same_params(r.params, profile.params)), None)
+    if run is not None:
+        record = dict(run.summary)
+        source = f"Backtest n° {run.id} ({run.start:%m/%Y} → {run.end:%m/%Y})"
+    elif profile.reference_summary:
+        record = dict(profile.reference_summary)
+        source = record.get("source") or "Backtest de référence"
+    else:
+        return {
+            "status": "untested",
+            "blocking": False,
+            "source": None,
+            "cagr": None,
+            "max_drawdown": None,
+            "reasons": ["Aucun backtest terminé avec ces réglages exacts : lance-en un."],
+        }
+    cagr, drawdown = record.get("cagr"), record.get("max_drawdown")
+    reasons = []
+    if cagr is not None and cagr < 0:
+        reasons.append(f"Historiquement déficitaire : {cagr:.1%} par an.")
+    if drawdown is not None and drawdown > params.max_drawdown_pct:
+        reasons.append(
+            f"Drawdown de {drawdown:.1%}, au-delà de la limite de {params.max_drawdown_pct:.0%}."
+        )
+    status = "ok"
+    if cagr is not None and cagr < 0:
+        status = "deficit"
+    elif reasons:
+        status = "drawdown"
+    return {
+        "status": status,
+        "blocking": bool(reasons),
+        "source": source,
+        "cagr": cagr,
+        "max_drawdown": drawdown,
+        "reasons": reasons,
+    }
+
+
+def profile_view(
+    profile: StrategyProfile, active_id: int | None, verdict: dict[str, Any] | None = None
+) -> dict[str, Any]:
     params = StrategyParams.from_dict(profile.params)
     defaults = StrategyParams().to_dict()
     current = params.to_dict()
@@ -166,6 +247,7 @@ def profile_view(profile: StrategyProfile, active_id: int | None) -> dict[str, A
         "is_active": profile.id == active_id,
         "created_at": profile.created_at.isoformat() if profile.created_at else None,
         "updated_at": profile.updated_at.isoformat(),
+        "risk": verdict,
     }
 
 
@@ -174,7 +256,9 @@ def list_profiles(session: Session) -> dict[str, Any]:
     config = active_config(session)
     profiles = session.scalars(select(StrategyProfile).order_by(StrategyProfile.id)).all()
     return {
-        "profiles": [profile_view(p, config.profile_id) for p in profiles],
+        "profiles": [
+            profile_view(p, config.profile_id, risk_verdict(session, p)) for p in profiles
+        ],
         "active_profile_id": config.profile_id,
         "active_version": config.version,
         **param_specs(),
@@ -207,6 +291,7 @@ def update_profile(
     name: str | None = None,
     description: str | None = None,
     params: dict[str, Any] | None = None,
+    confirm_risk: bool = False,
 ) -> StrategyProfile:
     """Save a profile; saving the active one sends its new parameters to the live screener."""
     profile = _profile(session, profile_id)
@@ -215,18 +300,26 @@ def update_profile(
     if description is not None:
         profile.description = description.strip() or None
     if params is not None:
-        profile.params = coerce_params(params, StrategyParams.from_dict(profile.params)).to_dict()
+        new = coerce_params(params, StrategyParams.from_dict(profile.params)).to_dict()
+        if not _same_params(new, profile.params):
+            # The documented backtest no longer describes these parameters.
+            profile.reference_summary = None
+        profile.params = new
     profile.updated_at = _now()
     session.flush()
     if active_config(session).profile_id == profile.id:
-        activate_profile(session, profile.id)
+        activate_profile(session, profile.id, confirm_risk)
     return profile
 
 
-def activate_profile(session: Session, profile_id: int) -> StrategyConfig:
+def activate_profile(
+    session: Session, profile_id: int, confirm_risk: bool = False
+) -> StrategyConfig:
     """Write the profile as a new active strategy_configs version (unless already identical).
 
-    Open positions keep the exit rules of the version they were opened with.
+    A profile whose backtest lost money or broke its drawdown limit is refused unless
+    `confirm_risk` is set; the warnings shown are kept with the version. Open positions keep
+    the exit rules of the version they were opened with.
     """
     profile = _profile(session, profile_id)
     current = active_config(session)
@@ -235,9 +328,27 @@ def activate_profile(session: Session, profile_id: int) -> StrategyConfig:
         params
     ):
         return current
+    verdict = risk_verdict(session, profile)
+    if verdict["blocking"] and not confirm_risk:
+        raise LabError(
+            "Activation bloquée : " + " ".join(verdict["reasons"]) + " Confirme explicitement "
+            "pour l'activer quand même.",
+            409,
+        )
     session.execute(update(StrategyConfig).where(StrategyConfig.is_active).values(is_active=False))
     version = (session.scalar(select(func.max(StrategyConfig.version))) or 0) + 1
-    config = StrategyConfig(version=version, params=params, is_active=True, profile_id=profile.id)
+    config = StrategyConfig(
+        version=version,
+        params=params,
+        is_active=True,
+        profile_id=profile.id,
+        activation={
+            "at": _now().isoformat(),
+            "risk_status": verdict["status"],
+            "warnings": verdict["reasons"] if verdict["blocking"] else [],
+            "confirmed": bool(verdict["blocking"] and confirm_risk),
+        },
+    )
     session.add(config)
     session.flush()
     return config

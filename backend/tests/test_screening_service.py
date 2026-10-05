@@ -29,14 +29,15 @@ class FakeProvider:
 
 
 def test_run_stores_deals_and_iv_and_expires_the_previous_proposals(session: Session) -> None:
-    provider = FakeProvider(make_snapshot("SPY", 500, 5), make_snapshot("QQQ", 400, 5))
+    provider = FakeProvider(make_snapshot("SPY", 500, 1), make_snapshot("QQQ", 400, 1))
 
     first = run_screener(session, provider, TODAY, starting_capital=20_000)
 
     config = session.scalar(select(StrategyConfig).where(StrategyConfig.is_active))
     assert config is not None and config.version == 1 and config.params["max_deals"] == 5
     assert first.filter_counts["selected"] == 2
-    missing = {*config.params["large_caps"], *config.params["wheel"], "IWM"}
+    # Large caps are off by default: they are not even fetched.
+    missing = {*config.params["wheel"], "IWM"}
     assert set(first.filter_counts["errors"]) == missing
 
     query = select(Opportunity).where(Opportunity.screener_run_id == first.id)
@@ -48,7 +49,12 @@ def test_run_stores_deals_and_iv_and_expires_the_previous_proposals(session: Ses
     assert len(deal.legs) == 2 and {leg.side for leg in deal.legs} == {Side.SELL, Side.BUY}
     quantity = deal.legs[0].quantity
     assert quantity == deal.metrics["quantity"] > 0
-    assert deal.collateral == deal.max_loss <= Decimal("2000")
+    # 1 % of 20 000 per trade; the stress loss of an out-of-the-money spread is its max loss.
+    assert deal.collateral == deal.max_loss <= Decimal("200")
+    assert deal.stress_loss == deal.max_loss
+    sizing = deal.metrics["sizing"]
+    assert sizing["quantity"] == quantity and sizing["binding"] == "risk_budget"
+    assert sizing["risk_budget"] == 200 and deal.metrics["cluster"].startswith("Indices US")
     assert deal.metrics["take_profit_price"] == pytest.approx(float(deal.credit) / 2, abs=0.01)
     assert deal.metrics["iv_rank_method"] == "hv_proxy"
 

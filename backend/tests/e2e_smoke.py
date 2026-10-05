@@ -10,12 +10,14 @@ deal. Then reads the API and the Next.js pages and fails on the first thing miss
 import json
 import sys
 import urllib.request
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
 from app.config import get_settings
 from app.db import SessionLocal
+from app.domain.orders import Quote
 from app.models import Opportunity, Order, Position
 from app.models.enums import (
     OpportunityStatus,
@@ -24,7 +26,7 @@ from app.models.enums import (
     RejectReason,
     Side,
 )
-from app.services.trading import accept_opportunity, reject_opportunity, sync_orders
+from app.services.trading import accept_opportunity, monitor, reject_opportunity, sync_orders
 from tests.fake_broker import FakeBroker
 
 
@@ -52,6 +54,11 @@ def play_cycle() -> tuple[str, str]:
         expect(len(deals) >= 2, f"le screener a proposé {len(deals)} deals (2 au moins)")
         best, second = deals[0], deals[1]
 
+        # A monitor pass (in-memory broker, market open) and quotes for the deal: the entry
+        # checks pass as they would with a healthy worker during the session.
+        monitor(session, broker, datetime.now(ZoneInfo("America/New_York")).date(), None)
+        for leg in best.legs:
+            broker.quotes[leg.option_symbol] = Quote(float(leg.bid), float(leg.ask))
         position = accept_opportunity(
             session, broker, best.id, "e2e-accept-0001", get_settings().starting_capital
         )

@@ -19,8 +19,6 @@ export default async function Dashboard() {
     );
   }
 
-  const limit = board.capital * board.max_engaged_pct;
-  const used = limit > 0 ? Math.min(board.engaged / limit, 1) : 0;
   const stats = board.analytics;
   const card = "rounded-2xl border border-line bg-surface p-4";
   const th = "px-2 py-1.5 font-medium";
@@ -31,36 +29,24 @@ export default async function Dashboard() {
       <h1 className="font-display text-2xl font-extrabold tracking-tight md:text-3xl">Tableau de bord</h1>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat label="Capital" value={usd(board.capital)} hint={`Départ ${usd(board.starting_capital)}`} />
-        <Stat label="Disponible" value={usd(board.available)} hint="Capital moins le capital immobilisé" />
+        <Stat label="Capital" value={usd(board.capital)} hint={`Départ ${usd(board.starting_capital)}, réalisé inclus`} />
+        <Stat label="Cash disponible" value={usd(board.cash_available)} hint="Capital moins le collatéral" />
         <Stat
-          label="Immobilisé"
-          value={usd(board.engaged)}
-          hint={`${pct(board.capital > 0 ? board.engaged / board.capital : 0)} du capital`}
+          label="Collatéral"
+          value={usd(board.collateral)}
+          hint={`Bloqué par le courtier, limite ${pct(board.max_engaged_pct)}`}
         />
         <Stat
-          label="Encore engageable"
-          value={usd(board.engagement_capacity)}
-          hint={`Limite ${pct(board.max_engaged_pct)}, ${usd(board.capital * board.max_trade_pct)} max par trade`}
+          label="Perte max ouverte"
+          value={usd(board.open_max_loss)}
+          valueClass={board.open_max_loss > board.open_max_loss_limit ? "text-danger" : ""}
+          hint={`Contractuelle, limite ${usd(board.open_max_loss_limit)}`}
         />
-      </div>
-
-      <div className="rounded-2xl border border-line bg-surface p-4">
-        <div className="mb-2 flex flex-wrap justify-between gap-x-3 gap-y-1 text-sm">
-          <span>Capital immobilisé sur la limite de {pct(board.max_engaged_pct)}</span>
-          <span className="tabular-nums">
-            {usd(board.engaged)} / {usd(limit)}
-          </span>
-        </div>
-        <div className="h-2 overflow-hidden rounded-full bg-line">
-          <div
-            className={`h-full ${used >= 0.9 ? "bg-danger" : used >= 0.7 ? "bg-warning" : "bg-success"}`}
-            style={{ width: `${used * 100}%` }}
-          />
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <Stat
+          label="Stress loss"
+          value={usd(board.stress_loss)}
+          hint={`Choc de baisse des sous-jacents, ${pct(board.capital > 0 ? board.stress_loss / board.capital : 0)} du capital`}
+        />
         <Stat label="P&L réalisé" value={signed(board.realized_pnl)} valueClass={pnlClass(board.realized_pnl)} />
         <Stat
           label="P&L latent"
@@ -68,6 +54,40 @@ export default async function Dashboard() {
           valueClass={pnlClass(board.unrealized_pnl)}
           hint="Au dernier mark des positions ouvertes"
         />
+        <Stat
+          label="Valeur du compte"
+          value={usd(board.equity)}
+          hint={`Jour ${pct(board.daily_change)} · mois ${pct(board.monthly_change)} · drawdown ${pct(board.drawdown)}`}
+        />
+      </div>
+
+      <div className={`${card} space-y-3`}>
+        <div className="text-sm">Risque par cluster corrélé (limite {usd(board.cluster_limit)} chacun)</div>
+        {board.clusters.length === 0 ? <p className="text-xs opacity-60">Aucune position ouverte.</p> : null}
+        {board.clusters.map((c) => {
+          const share = board.cluster_limit > 0 ? Math.min(c.risk / board.cluster_limit, 1) : 0;
+          return (
+            <div key={c.cluster}>
+              <div className="mb-1 flex justify-between gap-2 text-xs">
+                <span>{c.cluster}</span>
+                <span className="tabular-nums">{usd(c.risk)}</span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-line">
+                <div
+                  className={`h-full ${share >= 0.9 ? "bg-danger" : share >= 0.7 ? "bg-warning" : "bg-success"}`}
+                  style={{ width: `${share * 100}%` }}
+                />
+              </div>
+            </div>
+          );
+        })}
+        <p className="text-xs opacity-60">
+          Limites : perte du jour {pct(board.limits.daily_loss)}, du mois {pct(board.limits.monthly_loss)}, drawdown{" "}
+          {pct(board.limits.drawdown)}, risque d&apos;un trade {pct(board.limits.trade_risk)} du capital.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat
           label="Positions"
           value={`${board.open_positions} ouverte${board.open_positions > 1 ? "s" : ""}`}

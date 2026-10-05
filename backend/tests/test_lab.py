@@ -28,43 +28,82 @@ def fake_fetch(calls: list):
     return fetch
 
 
-def test_first_use_turns_the_active_parameters_into_profiles(session: Session) -> None:
+def test_first_use_makes_prudent_the_active_profile(session: Session) -> None:
     data = lab.list_profiles(session)
 
     names = [p["name"] for p in data["profiles"]]
-    assert names == ["Actuel", "Prudent"]
-    actuel, prudent = data["profiles"]
-    assert actuel["is_active"] and data["active_profile_id"] == actuel["id"]
-    assert actuel["changed"] == []
-    assert set(prudent["changed"]) == {
-        "enable_large_caps",
-        "dte_min",
-        "delta_min",
-        "delta_max",
-    }
-    assert {f["key"] for f in data["fields"]} >= {"use_trend_filter", "min_iv_rank"}
+    assert names == ["Prudent", "Actuel"]
+    prudent, actuel = data["profiles"]
+    assert prudent["is_active"] and data["active_profile_id"] == prudent["id"]
+    assert prudent["changed"] == []
+    assert not actuel["is_active"]
+    assert {"enable_large_caps", "dte_min", "delta_min", "delta_max"} <= set(actuel["changed"])
+    # The former defaults are flagged by their documented backtest.
+    assert actuel["risk"]["status"] == "deficit" and actuel["risk"]["blocking"]
+    assert any("déficitaire" in r for r in actuel["risk"]["reasons"])
+    assert any("Drawdown" in r for r in actuel["risk"]["reasons"])
+    assert prudent["risk"]["status"] == "untested" and not prudent["risk"]["blocking"]
+    assert {f["key"] for f in data["fields"]} >= {"use_trend_filter", "max_trade_risk_pct"}
     lab.list_profiles(session)  # idempotent
     assert len(session.scalars(select(StrategyProfile)).all()) == 2
+
+
+def test_activating_a_loss_making_profile_needs_an_explicit_confirmation(
+    session: Session,
+) -> None:
+    lab.ensure_profiles(session)
+    before = active_config(session)
+    actuel = session.scalar(select(StrategyProfile).where(StrategyProfile.name == "Actuel"))
+
+    with pytest.raises(lab.LabError, match="Activation bloquée") as error:
+        lab.activate_profile(session, actuel.id)
+    assert error.value.status_code == 409
+    assert active_config(session).id == before.id
+
+    config = lab.activate_profile(session, actuel.id, confirm_risk=True)
+    assert config.version == before.version + 1 and config.profile_id == actuel.id
+    assert config.activation["confirmed"] and config.activation["warnings"]
+    assert not before.is_active
+
+
+def test_a_backtest_run_of_the_exact_parameters_drives_the_verdict(session: Session) -> None:
+    lab.ensure_profiles(session)
+    prudent = session.scalar(select(StrategyProfile).where(StrategyProfile.name == "Prudent"))
+    run = lab.queue_backtest(session, prudent.id, None, START, END, 20_000)
+    run.status = lab.DONE
+    run.summary = {"cagr": 0.05, "max_drawdown": 0.25}
+    session.flush()
+
+    verdict = lab.risk_verdict(session, prudent)
+    assert verdict["status"] == "drawdown" and verdict["blocking"]  # 25 % > 10 % limit
+    # Changed parameters: that run no longer describes the profile.
+    lab.update_profile(session, prudent.id, params={"min_iv_rank": 40})
+    assert lab.risk_verdict(session, prudent)["status"] == "untested"
+    # Editing a documented preset drops its reference.
+    actuel = session.scalar(select(StrategyProfile).where(StrategyProfile.name == "Actuel"))
+    lab.update_profile(session, actuel.id, params={"min_iv_rank": 40})
+    assert actuel.reference_summary is None
 
 
 def test_activating_a_profile_writes_a_new_screener_version(session: Session) -> None:
     lab.ensure_profiles(session)
     before = active_config(session)
-    prudent = session.scalar(select(StrategyProfile).where(StrategyProfile.name == "Prudent"))
+    other = lab.create_profile(session, "Autre", None, {"dte_min": 45})
 
-    config = lab.activate_profile(session, prudent.id)
+    config = lab.activate_profile(session, other.id)
 
-    assert config.version == before.version + 1 and config.profile_id == prudent.id
+    assert config.version == before.version + 1 and config.profile_id == other.id
     assert not before.is_active and active_config(session).id == config.id
-    assert StrategyParams.from_dict(config.params).dte_min == 40
+    assert StrategyParams.from_dict(config.params).dte_min == 45
+    assert config.activation["risk_status"] == "untested"
     # Same parameters again: no new version.
-    assert lab.activate_profile(session, prudent.id).id == config.id
+    assert lab.activate_profile(session, other.id).id == config.id
     # Saving the active profile sends the change to the screener.
-    lab.update_profile(session, prudent.id, params={"min_iv_rank": 40})
+    lab.update_profile(session, other.id, params={"min_iv_rank": 40})
     assert StrategyParams.from_dict(active_config(session).params).min_iv_rank == 40
     assert active_config(session).version == config.version + 1
     with pytest.raises(lab.LabError, match="profil actif"):
-        lab.delete_profile(session, prudent.id)
+        lab.delete_profile(session, other.id)
 
 
 def test_profile_names_are_unique_and_params_validated(session: Session) -> None:
@@ -163,6 +202,7 @@ def test_api_profiles_and_backtests(session: Session) -> None:
     assert len(listing["profiles"]) == 2
     assert created.status_code == 200, created.text
     assert created.json()["params"]["dte_min"] == 40  # copied from Prudent
+    assert created.json()["risk"]["status"] == "untested"
     assert created.json()["params"]["use_trend_filter"] is True
     assert bad.status_code == 422 and "invalide" in bad.json()["detail"]
     assert renamed.json()["name"] == "Tendance 200"

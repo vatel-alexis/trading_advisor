@@ -14,7 +14,6 @@ from app.domain.exits import (
 from app.domain.market import atm_iv30, hv30, iv_rank, realized_vol_series
 from app.domain.params import StrategyParams
 from app.domain.pricing import bs_delta, prob_above, spread_pct
-from app.domain.risk import AccountState, size_position
 from tests.chains import TODAY, closes_with_vol_range, make_snapshot
 
 PARAMS = StrategyParams()
@@ -78,24 +77,6 @@ def test_atm_iv30_takes_the_expiration_nearest_30_days() -> None:
     snap = make_snapshot("SPY", 500, 5, iv=0.22, dtes=(10, 31, 60))
     assert atm_iv30(snap, TODAY) == pytest.approx(0.22)
     assert hv30(snap.closes) is not None
-
-
-# --- risk ----------------------------------------------------------------------------------
-
-
-def test_size_is_capped_at_ten_percent_of_capital() -> None:
-    assert size_position(450, AccountState(20_000), PARAMS) == 4  # 2 000 / 450
-    assert size_position(1_200, AccountState(20_000), PARAMS) == 1
-    assert size_position(2_500, AccountState(20_000), PARAMS) == 0
-
-
-def test_size_respects_the_fifty_percent_engaged_limit() -> None:
-    assert size_position(450, AccountState(20_000, engaged=9_000), PARAMS) == 2  # 1 000 left
-    assert size_position(450, AccountState(20_000, engaged=10_000), PARAMS) == 0
-
-
-def test_capital_includes_realized_pnl() -> None:
-    assert size_position(1_000, AccountState(30_000), PARAMS) == 3
 
 
 # --- exits ---------------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 from app.models.base import Base
 from app.models.lab import BacktestRun, MarketHistoryCache, StrategyProfile
-from app.models.market import AccountSnapshot, IvHistory
+from app.models.market import AccountSnapshot, IvHistory, JobHeartbeat
 from app.models.strategy import (
     Decision,
     Opportunity,
@@ -18,6 +18,7 @@ __all__ = [
     "Decision",
     "Fill",
     "IvHistory",
+    "JobHeartbeat",
     "MarketHistoryCache",
     "Opportunity",
     "OpportunityLeg",
