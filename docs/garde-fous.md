@@ -85,6 +85,29 @@ autorisé ; un clic montre le détail de chaque contrôle.
   version active s'il l'était) et crée le profil expérimental, dont l'activation demande une
   confirmation (backtest déficitaire).
 
+## Notes de qualité et NO TRADE
+
+Chaque candidat reçoit des notes séparées (0 à 1), stockées avec le deal :
+
+| Note | Contenu (poids par défaut) |
+| --- | --- |
+| Qualité absolue | marge de sécurité 20 (point mort en écarts-types), rendement sur risque non annualisé 15, fenêtre temporelle 10, régime de marché 10 (IV Rank, IV/HV, tendance), qualité des données 5 |
+| Qualité d'exécution | exécution et liquidité 25 : écart bid/ask, écart mid/naturel, open interest |
+| Adéquation au portefeuille | 15 : usage maximal des limites (perte ouverte, cluster, échéance, collatéral) après ajout du deal |
+
+- Score final = la plus basse des trois notes ; la somme pondérée des sept composantes est
+  affichée pour information. Rang relatif = place parmi les candidats du jour.
+- NO TRADE dès qu'une règle bloque : une note sous `min_quality_score` (0,30), un contrat qui ne
+  tient dans aucune limite, une position déjà ouverte, le secteur plein. Les raisons exactes
+  sont listées sous les deals (« NO TRADE ») et dans « Pourquoi ce deal ? ».
+- Rendement sur risque : crédit / perte max pour un spread, crédit / cash immobilisé pour une
+  put, sans annualisation (l'AROC reste affiché, filtre désactivé par défaut).
+- Cluster d'échéance : 5 % du capital de risque au plus sur une même date d'échéance.
+- Grecques du portefeuille (delta, vega, theta) : calculées à l'entrée de chaque deal ; les
+  positions plus anciennes sont comptées en « donnée absente ».
+- Migration 0006 : écrit ces réglages dans Prudent (nouvelle version active s'il l'est) ;
+  Actuel garde son filtre AROC sans minimum de qualité.
+
 ## Migrations sur la base hébergée
 
 Les migrations Alembic atteignent Neon par le workflow GitHub Actions `Worker` : chaque passage

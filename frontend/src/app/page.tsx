@@ -3,7 +3,7 @@ import Link from "next/link";
 import { PnlCurve, PremiumBars } from "@/components/Charts";
 import { ApiDown, Stat } from "@/components/Stat";
 import { getDashboard, getHealth } from "@/lib/api";
-import { REASON_LABEL, STRATEGY_LABEL, dateTime, month, pct, pnlClass, signed, usd } from "@/lib/format";
+import { REASON_LABEL, STRATEGY_LABEL, dateTime, day, month, pct, pnlClass, signed, usd } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -81,6 +81,42 @@ export default async function Dashboard() {
             </div>
           );
         })}
+        <div className="pt-1 text-sm">Risque par échéance (limite {usd(board.expiration_limit)} chacune)</div>
+        {board.expirations.map((e) => {
+          const share = board.expiration_limit > 0 ? Math.min(e.risk / board.expiration_limit, 1) : 0;
+          return (
+            <div key={e.expiration}>
+              <div className="mb-1 flex justify-between gap-2 text-xs">
+                <span>{day(e.expiration)}</span>
+                <span className="tabular-nums">{usd(e.risk)}</span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-line">
+                <div
+                  className={`h-full ${share >= 0.9 ? "bg-danger" : share >= 0.7 ? "bg-warning" : "bg-success"}`}
+                  style={{ width: `${share * 100}%` }}
+                />
+              </div>
+            </div>
+          );
+        })}
+        <div className="grid grid-cols-3 gap-2 pt-1 text-xs">
+          <div>
+            <div className="opacity-60">Delta global</div>
+            <div className="tabular-nums">{board.greeks.delta.toFixed(0)} actions</div>
+          </div>
+          <div>
+            <div className="opacity-60">Vega</div>
+            <div className="tabular-nums">{usd(board.greeks.vega)} / pt d&apos;IV</div>
+          </div>
+          <div>
+            <div className="opacity-60">Theta</div>
+            <div className="tabular-nums">{usd(board.greeks.theta)} / jour</div>
+          </div>
+        </div>
+        <p className="text-xs opacity-60">
+          Grecques calculées à l&apos;entrée de chaque position
+          {board.greeks.missing ? `, donnée absente pour ${board.greeks.missing} position(s) plus ancienne(s)` : ""}.
+        </p>
         <p className="text-xs opacity-60">
           Limites : perte du jour {pct(board.limits.daily_loss)}, du mois {pct(board.limits.monthly_loss)}, drawdown{" "}
           {pct(board.limits.drawdown)}, risque d&apos;un trade {pct(board.limits.trade_risk)} du capital.

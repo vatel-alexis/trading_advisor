@@ -28,11 +28,13 @@ NO_TRADE_MESSAGES = {
     "risk_budget": "Aucun contrat ne tient dans le budget de risque d'un trade",
     "open_risk_limit": "La perte maximale ouverte totale serait dépassée",
     "cluster_limit": "La limite de risque du cluster corrélé serait dépassée",
+    "expiration_limit": "La limite de risque des positions de même échéance serait dépassée",
     "sector_limit": "Le nombre maximal de positions du secteur est atteint",
     "capital_limit": "Le collatéral disponible ne suffit pas",
     "already_open": "Une position est déjà ouverte ou en attente sur ce sous-jacent",
     "cooldown": "Délai avant de revenir sur ce titre",
     "max_deals": "Nombre maximal de deals du jour atteint",
+    "low_quality": "Une des notes (qualité, exécution, portefeuille) est sous le minimum",
 }
 
 
@@ -133,6 +135,12 @@ class Portfolio:
             if cluster_of(e.underlying, e.sector, params) == cluster
         )
 
+    def expiration_risk(self, expiration: date | None) -> float:
+        """Risk of the positions expiring that day (they move together into expiration)."""
+        if expiration is None:
+            return 0.0
+        return sum(e.risk() for e in self.exposures if e.expiration == expiration)
+
     def sector_count(self, sector: str | None) -> int:
         """Positions in a sector; covered calls ride on shares already counted."""
         return sum(1 for e in self.exposures if e.sector == sector and e.strategy != COVERED_CALL)
@@ -192,6 +200,7 @@ def size_deal(
     portfolio: Portfolio,
     params: StrategyParams,
     score: float | None = None,
+    expiration: date | None = None,
 ) -> Sizing:
     """Contracts = floor(risk budget / risk of one contract), within every portfolio limit.
 
@@ -211,6 +220,12 @@ def size_deal(
             capital * params.max_cluster_risk_pct - portfolio.cluster_risk(cluster, params),
             risk_unit,
         ),
+        "expiration_limit": _floor(
+            capital * params.max_expiration_risk_pct - portfolio.expiration_risk(expiration),
+            risk_unit,
+        )
+        if expiration is not None
+        else 10**6,
         "capital_limit": min(
             _floor(capital * params.max_trade_pct, collateral),
             _floor(capital * params.max_engaged_pct - portfolio.engaged, collateral),
@@ -242,6 +257,12 @@ def check_limits(exposure: Exposure, portfolio: Portfolio, params: StrategyParam
         if after.cluster_risk(cluster, params) > capital * params.max_cluster_risk_pct + 0.01:
             out.append("cluster_limit")
         if (
+            exposure.expiration is not None
+            and after.expiration_risk(exposure.expiration)
+            > capital * params.max_expiration_risk_pct + 0.01
+        ):
+            out.append("expiration_limit")
+        if (
             params.use_sector_limit
             and exposure.sector
             and portfolio.sector_count(exposure.sector) >= params.max_per_sector
@@ -252,13 +273,31 @@ def check_limits(exposure: Exposure, portfolio: Portfolio, params: StrategyParam
     return out
 
 
+def utilization(after: Portfolio, exposure: Exposure, params: StrategyParams) -> dict[str, float]:
+    """Share of each portfolio limit used once `exposure` is in `after`."""
+    capital = after.capital
+    cluster = cluster_of(exposure.underlying, exposure.sector, params)
+
+    def share(used: float, pct: float) -> float:
+        return used / (capital * pct) if capital > 0 and pct > 0 else 1.0
+
+    return {
+        "open_risk": share(after.open_max_loss, params.max_open_risk_pct),
+        "cluster": share(after.cluster_risk(cluster, params), params.max_cluster_risk_pct),
+        "expiration": share(
+            after.expiration_risk(exposure.expiration), params.max_expiration_risk_pct
+        ),
+        "collateral": share(after.engaged, params.max_engaged_pct),
+    }
+
+
 def expiration_concentration(exposures: Iterable[Exposure]) -> dict[str, float]:
-    """Contractual max loss per expiration date."""
+    """Risk per expiration date."""
     out: dict[str, float] = {}
     for e in exposures:
         if e.expiration is not None:
             key = e.expiration.isoformat()
-            out[key] = out.get(key, 0.0) + e.max_loss
+            out[key] = out.get(key, 0.0) + e.risk()
     return dict(sorted(out.items()))
 
 

@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 
 import { acceptOpportunity, rejectOpportunity } from "@/app/actions";
-import type { ActionResult, Opportunity } from "@/lib/api";
+import type { ActionResult, Impact, Opportunity, Quality } from "@/lib/api";
 import { STRATEGY_LABEL, day, newKey, pct, price, usd } from "@/lib/format";
 
 const REASONS = [
@@ -78,8 +78,9 @@ export function OpportunityCard({ deal }: { deal: Opportunity }) {
           }
         />
         <Row label="Détention prévue" value={deal.holding_window == null ? "donnée absente" : `${deal.holding_window} j`} />
-        <Row label="Rendement / risque" value={pct(deal.ror)} />
-        <Row label="AROC" value={pct(deal.aroc)} />
+        <Row label="Gain max" value={usd(deal.max_gain)} />
+        <Row label="Rendement / risque" value={deal.return_on_risk == null ? pct(deal.ror) : pct(deal.return_on_risk)} />
+        <Row label="AROC (informatif)" value={pct(deal.aroc)} />
         <Row label="Crédit" value={`${price(deal.credit)} × ${deal.quantity}`} />
         <Row label="Prime totale" value={usd(deal.credit_total)} />
         <Row label="Collatéral" value={usd(deal.collateral)} />
@@ -91,6 +92,8 @@ export function OpportunityCard({ deal }: { deal: Opportunity }) {
         <Row label="Point mort" value={price(deal.breakeven)} />
         <Row label="IV Rank" value={deal.iv_rank == null ? "—" : deal.iv_rank.toFixed(0)} />
       </dl>
+      {deal.quality ? <QualityDetails quality={deal.quality} /> : null}
+      {deal.impact ? <ImpactDetails impact={deal.impact} /> : null}
       {deal.sizing ? <SizingDetails sizing={deal.sizing} /> : null}
       <p className="mt-2 text-xs opacity-60">
         {deal.take_profit_price != null ? `Rachat auto à ${price(deal.take_profit_price)}` : "Pas d'objectif de gain"}
@@ -202,6 +205,7 @@ const CAP_LABEL: Record<string, string> = {
   risk_budget: "Budget de risque du trade",
   open_risk_limit: "Perte max ouverte totale",
   cluster_limit: "Limite du cluster corrélé",
+  expiration_limit: "Limite par échéance",
   capital_limit: "Collatéral disponible",
 };
 
@@ -221,6 +225,99 @@ function SizingDetails({ sizing }: { sizing: NonNullable<Opportunity["sizing"]> 
             {key === sizing.binding ? " ← limite retenue" : ""}
           </li>
         ))}
+      </ul>
+    </details>
+  );
+}
+
+export const COMPONENT_LABEL: Record<string, string> = {
+  execution: "Exécution et liquidité",
+  safety: "Marge de sécurité",
+  return: "Rendement ajusté du risque",
+  time: "Fenêtre temporelle",
+  regime: "Régime de marché",
+  portfolio: "Adéquation au portefeuille",
+  data: "Qualité des données",
+};
+
+function score(value: number | null | undefined) {
+  return value == null ? "—" : `${Math.round(value * 100)}/100`;
+}
+
+export function QualityBadges({ quality }: { quality: Quality }) {
+  return (
+    <div className="flex flex-wrap gap-1.5 text-xs">
+      {!quality.eligible ? (
+        <span className="rounded-full bg-danger px-2 py-0.5 font-semibold text-on-danger">NO TRADE</span>
+      ) : null}
+      <span className="rounded-full border border-line px-2 py-0.5">Qualité {score(quality.absolute)}</span>
+      <span className="rounded-full border border-line px-2 py-0.5">Exécution {score(quality.execution)}</span>
+      <span className="rounded-full border border-line px-2 py-0.5">Portefeuille {score(quality.portfolio)}</span>
+      {quality.rank ? (
+        <span className="rounded-full border border-line px-2 py-0.5">
+          Rang {quality.rank}/{quality.rank_of}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+// "Why this deal?": the three scores, each component, weaknesses and missing data.
+function QualityDetails({ quality }: { quality: Quality }) {
+  return (
+    <details className="mt-3 text-xs" open={!quality.eligible}>
+      <summary className="cursor-pointer text-accent">Pourquoi ce deal ?</summary>
+      <div className="mt-2 space-y-2">
+        <QualityBadges quality={quality} />
+        <p className="opacity-80">
+          Score final {score(quality.final)} : la plus basse des trois notes, pour qu&apos;un bon rendement ne cache ni
+          un marché peu liquide ni un portefeuille déjà chargé.
+        </p>
+        <ul className="space-y-0.5">
+          {Object.entries(quality.components).map(([key, value]) => (
+            <li key={key} className="flex justify-between gap-2">
+              <span className="opacity-70">{COMPONENT_LABEL[key] ?? key}</span>
+              <span className={`tabular-nums ${value != null && value < 0.5 ? "text-warning" : ""}`}>{score(value)}</span>
+            </li>
+          ))}
+        </ul>
+        {quality.weaknesses.length ? <p>Points faibles : {quality.weaknesses.join(", ")}.</p> : null}
+        {quality.missing.length ? <p className="opacity-80">Donnée absente : {quality.missing.join(", ")}.</p> : null}
+        {quality.blocking.length ? (
+          <ul className="text-danger">
+            {quality.blocking.map((b) => (
+              <li key={b}>NO TRADE : {b}</li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
+// The portfolio once the deal is added, against each limit.
+function ImpactDetails({ impact }: { impact: Impact }) {
+  const rows = [
+    ["Perte max ouverte", impact.open_max_loss_after, impact.open_max_loss_limit],
+    [`Cluster ${impact.cluster}`, impact.cluster_risk_after, impact.cluster_limit],
+    ["Même échéance", impact.expiration_risk_after, impact.expiration_limit],
+  ] as const;
+  return (
+    <details className="mt-2 text-xs">
+      <summary className="cursor-pointer text-accent">Impact sur le portefeuille</summary>
+      <ul className="mt-1 space-y-0.5">
+        {rows.map(([label, after, limit]) => (
+          <li key={label} className={`flex justify-between gap-2 ${after > limit ? "text-danger" : ""}`}>
+            <span className="opacity-70">{label}</span>
+            <span className="tabular-nums">
+              {usd(after)} / {usd(limit)}
+            </span>
+          </li>
+        ))}
+        <li className="flex justify-between gap-2">
+          <span className="opacity-70">Stress loss après ajout</span>
+          <span className="tabular-nums">{usd(impact.stress_loss_after)}</span>
+        </li>
       </ul>
     </details>
   );

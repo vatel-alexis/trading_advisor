@@ -1,11 +1,12 @@
 import { ApiDown } from "@/components/Stat";
-import { OpportunityCard } from "@/components/OpportunityCard";
-import { getOpportunities } from "@/lib/api";
+import { OpportunityCard, QualityBadges } from "@/components/OpportunityCard";
+import { getNoTrade, getOpportunities } from "@/lib/api";
+import { STRATEGY_LABEL, dateTime } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
 export default async function Page() {
-  const deals = await getOpportunities();
+  const [deals, noTrade] = await Promise.all([getOpportunities(), getNoTrade()]);
 
   return (
     <section className="space-y-4">
@@ -29,6 +30,35 @@ export default async function Page() {
           ))}
         </div>
       )}
+      {noTrade && noTrade.rows.length ? (
+        <div className="rounded-2xl border border-line bg-surface p-4">
+          <h2 className="font-display text-lg font-bold">NO TRADE</h2>
+          <p className="mb-3 text-xs opacity-70">
+            Candidats classés mais sans contrat au dernier passage
+            {noTrade.run_at ? ` (${dateTime(noTrade.run_at)})` : ""}, avec chaque règle bloquante.
+          </p>
+          <ul className="space-y-3">
+            {noTrade.rows.map((row) => (
+              <li key={row.underlying} className="text-sm">
+                <div className="font-semibold">
+                  {row.underlying}
+                  {row.strategy ? <span className="ml-2 text-xs opacity-60">{STRATEGY_LABEL[row.strategy]}</span> : null}
+                </div>
+                <ul className="text-xs text-danger">
+                  {row.reasons.map((r) => (
+                    <li key={r}>{r}</li>
+                  ))}
+                </ul>
+                {row.quality ? (
+                  <div className="mt-1">
+                    <QualityBadges quality={row.quality} />
+                  </div>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </section>
   );
 }

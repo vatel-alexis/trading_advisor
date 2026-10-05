@@ -105,6 +105,11 @@ def test_dashboard_and_positions_show_capital_and_the_last_mark(session: Session
     assert board["stress_loss"] == 800
     assert board["clusters"] == [{"cluster": "Indices US (SPY/QQQ/IWM)", "risk": 800}]
     assert board["equity"] == 20_090 and board["drawdown"] == 0
+    assert board["expirations"] == [{"expiration": position.legs[0].expiration.isoformat(),
+                                     "risk": 800}]  # fmt: skip
+    assert board["expiration_limit"] == 1_000
+    # Greeks were not recorded for this deal: flagged, not guessed.
+    assert board["greeks"]["missing"] == 1 and board["greeks"]["delta"] == 0
 
     [row] = views.positions(session, TODAY)["options"]
     assert row["id"] == position.id and row["mark"] == 0.6
@@ -125,7 +130,13 @@ def test_opportunity_cards_carry_weight_ror_and_target(session: Session) -> None
     assert card["weight"] == 0.04  # 800 / 20 000
     assert card["risk_pct"] == 0.04 and card["stress_loss"] == 800
     assert card["credit_total"] == 200 and card["ror"] == 0.25
-    assert card["take_profit_gain"] == 100.0
+    assert card["take_profit_gain"] == 100.0 and card["max_gain"] == 200
+    # The book once the deal is added, next to each limit.
+    impact = card["impact"]
+    assert impact["open_max_loss_after"] == 800 and impact["open_max_loss_limit"] == 2_000
+    assert impact["cluster_risk_after"] == 800 and impact["cluster_limit"] == 1_000
+    assert impact["expiration_risk_after"] == 800 and impact["expiration_limit"] == 1_000
+    assert card["quality"] is None  # a deal from before the scores
 
 
 def test_history_lists_closed_and_rejected_deals_with_filters(session: Session) -> None:

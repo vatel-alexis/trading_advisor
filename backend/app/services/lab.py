@@ -55,7 +55,9 @@ PRESETS: tuple[tuple[str, str, dict[str, Any]], ...] = (
         {"enable_large_caps": True, "dte_min": 25, "dte_max": 55, "min_holding_days": 0,
          "delta_min": 0.15, "delta_max": 0.30, "use_wheel_max_strike": True,
          "spread_widths": [5.0, 10.0, 2.5], "min_credit": 0.25, "max_trade_risk_pct": 0.10,
-         "max_open_risk_pct": 0.50, "max_cluster_risk_pct": 0.50},
+         "max_open_risk_pct": 0.50, "max_cluster_risk_pct": 0.50,
+         "max_expiration_risk_pct": 0.50, "use_ror_filter": False, "use_aroc_filter": True,
+         "min_quality_score": 0.0},
     ),
     (
         "Expérimental : grandes valeurs",

@@ -64,7 +64,13 @@ class StrategyParams:
     max_spread_pct: float = 0.15
     use_iv_rank_filter: bool = True
     min_iv_rank: float = 30.0
-    use_aroc_filter: bool = True
+    # Return on risk over the whole trade, not annualized (annualizing favours short DTEs).
+    # Spreads: credit / max loss. Single puts: credit / cash held.
+    use_ror_filter: bool = True
+    min_ror_spread: float = 0.10
+    min_ror_put: float = 0.01
+    # Annualized return (AROC), kept for information; off by default.
+    use_aroc_filter: bool = False
     min_aroc: float = 0.15
     # No new position on a stock whose report falls before expiration.
     use_earnings_filter: bool = True
@@ -96,6 +102,8 @@ class StrategyParams:
     max_open_risk_pct: float = 0.10
     # Sum of the risk of positions in one correlated cluster (index ETFs, a sector).
     max_cluster_risk_pct: float = 0.05
+    # Risk of the positions sharing one expiration date.
+    max_expiration_risk_pct: float = 0.05
     stress_move_etf: float = 0.15
     stress_move_stock: float = 0.30
     # Collateral caps (cash usage), per trade and in total.
@@ -130,10 +138,17 @@ class StrategyParams:
     iv_rank_min_history: int = 120
     risk_free_rate: float = 0.04
 
-    # Ranking score = weights . (PoP and AROC percentiles within the strategy, IVR/100).
-    score_weight_pop: float = 0.4
-    score_weight_aroc: float = 0.4
-    score_weight_iv_rank: float = 0.2
+    # Quality scores, each in [0, 1] (see app.domain.scoring). The final score is the lowest of
+    # the absolute quality, execution quality and portfolio fit scores; a deal below
+    # `min_quality_score` on any of them is NO TRADE. The weights split each score.
+    score_weight_execution: float = 0.25
+    score_weight_safety: float = 0.20
+    score_weight_return: float = 0.15
+    score_weight_time: float = 0.10
+    score_weight_regime: float = 0.10
+    score_weight_portfolio: float = 0.15
+    score_weight_data: float = 0.05
+    min_quality_score: float = 0.30
 
     def trade_risk_pct(self, score: float | None = None) -> float:
         """Risk budget of one trade as a share of capital (the exceptional one if it qualifies)."""
@@ -226,8 +241,17 @@ class StrategyParams:
             out.append("Aucun titre à trader : active au moins un groupe non vide.")
         if not self.spread_widths and self.enable_etfs + self.enable_large_caps:
             out.append("Il faut au moins une largeur de spread.")
-        if self.score_weight_pop + self.score_weight_aroc + self.score_weight_iv_rank <= 0:
-            out.append("Au moins un poids du score doit être positif.")
+        absolute = (
+            self.score_weight_safety
+            + self.score_weight_return
+            + self.score_weight_time
+            + self.score_weight_regime
+            + self.score_weight_data
+        )
+        if absolute <= 0:
+            out.append("Au moins un poids de la qualité absolue doit être positif.")
+        if self.max_trade_risk_pct > self.max_expiration_risk_pct:
+            out.append("Le risque d'un trade dépasse la limite par échéance.")
         return out
 
 
@@ -309,7 +333,14 @@ PARAM_SPECS: tuple[ParamSpec, ...] = (
               minimum=0.01, maximum=1, step=0.01),
     ParamSpec("use_earnings_filter", "Filtre résultats trimestriels", "filters", "bool",
               "Pas d'entrée sur une action qui publie avant l'échéance."),
-    ParamSpec("use_aroc_filter", "Filtre rendement annualisé (AROC)", "filters", "bool"),
+    ParamSpec("use_ror_filter", "Filtre rendement sur risque (non annualisé)", "filters", "bool",
+              "Crédit / perte max pour un spread, crédit / cash immobilisé pour une put."),
+    ParamSpec("min_ror_spread", "Rendement sur risque min (spread)", "filters", "pct",
+              toggle="use_ror_filter", minimum=0, maximum=1, step=0.01),
+    ParamSpec("min_ror_put", "Rendement sur cash min (put)", "filters", "pct",
+              toggle="use_ror_filter", minimum=0, maximum=1, step=0.005),
+    ParamSpec("use_aroc_filter", "Filtre rendement annualisé (AROC, informatif)", "filters",
+              "bool", "Annualiser favorise les échéances courtes : désactivé par défaut."),
     ParamSpec("min_aroc", "AROC min", "filters", "pct", toggle="use_aroc_filter",
               minimum=0, maximum=5, step=0.01),
     ParamSpec("use_trend_filter", "Filtre de tendance", "indicators", "bool",
@@ -341,6 +372,9 @@ PARAM_SPECS: tuple[ParamSpec, ...] = (
     ParamSpec("max_cluster_risk_pct", "Risque max par cluster corrélé", "risk", "pct",
               "ETF indiciels ensemble, puis chaque secteur.", minimum=0.005, maximum=1,
               step=0.005),
+    ParamSpec("max_expiration_risk_pct", "Risque max par échéance", "risk", "pct",
+              "Risque des positions de même échéance (cluster d'échéance).", minimum=0.005,
+              maximum=1, step=0.005),
     ParamSpec("stress_move_etf", "Choc de stress ETF", "risk", "pct",
               "Baisse du sous-jacent utilisée pour la perte en stress.", minimum=0.01,
               maximum=1, step=0.01),
@@ -383,12 +417,25 @@ PARAM_SPECS: tuple[ParamSpec, ...] = (
               "Sans elle, la position va à l'échéance."),
     ParamSpec("exit_dte", "Sortie à DTE", "exits", "int", toggle="use_time_exit", minimum=0,
               maximum=180),
-    ParamSpec("score_weight_pop", "Poids probabilité de gain", "score", "float",
-              "0 retire l'indicateur du score.", minimum=0, maximum=1, step=0.05),
-    ParamSpec("score_weight_aroc", "Poids rendement annualisé", "score", "float", minimum=0,
-              maximum=1, step=0.05),
-    ParamSpec("score_weight_iv_rank", "Poids IV Rank", "score", "float", minimum=0, maximum=1,
+    ParamSpec("score_weight_execution", "Poids exécution et liquidité", "score", "float",
+              "Écart bid/ask, écart mid/naturel, open interest.", minimum=0, maximum=1,
               step=0.05),
+    ParamSpec("score_weight_safety", "Poids marge de sécurité", "score", "float",
+              "Distance du point mort en écarts-types.", minimum=0, maximum=1, step=0.05),
+    ParamSpec("score_weight_return", "Poids rendement ajusté du risque", "score", "float",
+              "Rendement sur risque non annualisé.", minimum=0, maximum=1, step=0.05),
+    ParamSpec("score_weight_time", "Poids fenêtre temporelle", "score", "float",
+              "Pénalise une détention trop courte ou trop longue.", minimum=0, maximum=1,
+              step=0.05),
+    ParamSpec("score_weight_regime", "Poids régime de marché", "score", "float",
+              "IV Rank, IV/HV, tendance.", minimum=0, maximum=1, step=0.05),
+    ParamSpec("score_weight_portfolio", "Poids adéquation au portefeuille", "score", "float",
+              "Usage des limites après ajout du deal.", minimum=0, maximum=1, step=0.05),
+    ParamSpec("score_weight_data", "Poids qualité des données", "score", "float", minimum=0,
+              maximum=1, step=0.05),
+    ParamSpec("min_quality_score", "Score min sur chaque note", "score", "float",
+              "Sous ce seuil (qualité absolue, exécution ou portefeuille) : NO TRADE.",
+              minimum=0, maximum=1, step=0.05),
 )  # fmt: skip
 
 
