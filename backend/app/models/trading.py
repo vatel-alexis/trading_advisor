@@ -43,6 +43,7 @@ class Position(Timestamped, Base):
     exit_debit: Mapped[Decimal | None]
     collateral: Mapped[Decimal]
     max_loss: Mapped[Decimal | None]
+    stress_loss: Mapped[Decimal | None]
     realized_pnl: Mapped[Decimal | None]
     exit_reason: Mapped[ExitReason | None] = mapped_column(pg_enum(ExitReason, "exit_reason"))
 

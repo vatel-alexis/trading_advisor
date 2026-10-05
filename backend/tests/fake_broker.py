@@ -16,6 +16,8 @@ class FakeBroker:
         self.activities: list[Activity] = []
         self.is_open = True
         self.fail_next: BrokerError | None = None
+        # Every read fails as if Alpaca were unreachable.
+        self.down = False
 
     # --- test controls --------------------------------------------------------------------
 
@@ -66,10 +68,14 @@ class FakeBroker:
         self.set_status(order_id, "canceled")
 
     def option_quotes(self, symbols: Sequence[str]) -> dict[str, Quote]:
+        if self.down:
+            raise BrokerError("Alpaca injoignable")
         return {s: self.quotes[s] for s in symbols if s in self.quotes}
 
     def option_activities(self, since: date) -> list[Activity]:
         return [a for a in self.activities if a.day >= since]
 
     def market_is_open(self) -> bool:
+        if self.down:
+            raise BrokerError("Alpaca injoignable")
         return self.is_open

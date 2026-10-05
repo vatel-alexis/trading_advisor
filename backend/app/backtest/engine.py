@@ -28,7 +28,7 @@ from app.domain.exits import (
     take_profit_price,
 )
 from app.domain.params import StrategyParams
-from app.domain.risk import AccountState
+from app.domain.risk import AccountState, Exposure
 from app.domain.screener import PUT_CREDIT_SPREAD, screen
 
 IV_HISTORY_DAYS = 252
@@ -51,6 +51,7 @@ class Trade:
     credit: float
     collateral: float  # total
     max_loss: float  # total
+    stress_loss: float  # total
     short_delta: float
     pop: float
     iv_rank: float | None
@@ -234,7 +235,18 @@ def run_backtest(
             account,
             iv_history,
             open_underlyings={t.underlying for t in open_trades},
-            open_sectors=Counter(t.sector for t in open_trades if t.sector),
+            exposures=[
+                Exposure(
+                    t.underlying,
+                    t.sector,
+                    t.strategy,
+                    t.max_loss,
+                    t.stress_loss,
+                    t.collateral,
+                    t.expiration,
+                )
+                for t in open_trades
+            ],
             cooling_down={
                 sym
                 for sym, exited in last_exit.items()
@@ -262,6 +274,7 @@ def run_backtest(
                 credit=credit,
                 collateral=c.collateral * c.quantity,
                 max_loss=c.max_loss * c.quantity,
+                stress_loss=c.stress_loss * c.quantity,
                 short_delta=c.short_delta,
                 pop=c.pop,
                 iv_rank=c.iv_rank.value if c.iv_rank else None,

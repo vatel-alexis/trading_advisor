@@ -55,6 +55,8 @@ export async function closePosition(id: number, idempotencyKey: string): Promise
 
 function refreshLab() {
   for (const path of ["/reglages", "/backtests", "/"]) revalidatePath(path);
+  // The status banner (active profile) is in the layout of every page.
+  revalidatePath("/", "layout");
 }
 
 export async function saveProfile(
@@ -79,8 +81,8 @@ export async function createProfile(
   return { ok: true, message: "Profil créé.", id: (result.data as { id: number }).id };
 }
 
-export async function activateProfile(id: number): Promise<ActionResult> {
-  const result = await send("POST", `/profiles/${id}/activate`);
+export async function activateProfile(id: number, confirmRisk = false): Promise<ActionResult> {
+  const result = await send("POST", `/profiles/${id}/activate`, { confirm_risk: confirmRisk });
   refreshLab();
   if (!result.ok) return result;
   const data = result.data as { version: number };

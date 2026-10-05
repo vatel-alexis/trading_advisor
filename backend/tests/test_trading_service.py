@@ -26,6 +26,7 @@ from app.models.enums import (
     Side,
     StrategyType,
 )
+from app.services.safety import MONITOR, record_job
 from app.services.screening import active_config, share_lots
 from app.services.trading import (
     DecisionError,
@@ -52,10 +53,12 @@ def make_opportunity(
     credit: float,
     quantity: int,
     collateral: float,
+    stress_loss: float | None = None,
 ) -> Opportunity:
     """`legs` are (symbol, type, side, strike, bid, ask)."""
     config = active_config(session)
-    run = ScreenerRun(strategy_config_id=config.id, started_at=datetime.now(UTC))
+    now = datetime.now(UTC)
+    run = ScreenerRun(strategy_config_id=config.id, started_at=now, finished_at=now)
     session.add(run)
     session.flush()
     opportunity = Opportunity(
@@ -71,6 +74,7 @@ def make_opportunity(
         credit=Decimal(str(credit)),
         max_loss=Decimal(str(collateral)),
         collateral=Decimal(str(collateral)),
+        stress_loss=Decimal(str(collateral if stress_loss is None else stress_loss)),
         breakeven=Decimal("499"),
         short_delta=Decimal("-0.2"),
         pop=Decimal("0.8"),
@@ -102,9 +106,31 @@ def spread(session: Session) -> Opportunity:
     return make_opportunity(session, StrategyType.PUT_CREDIT_SPREAD, "SPY", legs, 1.0, 2, 800)
 
 
+def healthy(session: Session, broker: FakeBroker, opportunity_id: int | None = None) -> None:
+    """A worker and a monitor that just ran, an open market and quotes for the deal's legs."""
+    record_job(session, MONITOR, ok=True, details={"market_open": True, "broker_ok": True})
+    broker.is_open = True
+    if opportunity_id is not None:
+        for leg in session.get(Opportunity, opportunity_id).legs:
+            broker.quotes.setdefault(leg.option_symbol, Quote(float(leg.bid), float(leg.ask)))
+
+
+def accept(
+    session: Session,
+    broker: FakeBroker,
+    opportunity_id: int,
+    key: str,
+    capital: float = 20_000,
+    limit_price: float | None = None,
+) -> Position:
+    """Accept with every entry check passing (the checks have their own tests)."""
+    healthy(session, broker, opportunity_id)
+    return accept_opportunity(session, broker, opportunity_id, key, capital, limit_price)
+
+
 def open_spread(session: Session, broker: FakeBroker) -> Position:
     """Accept the spread and fill it at a 1.05 credit."""
-    position = accept_opportunity(session, broker, spread(session).id, "click-0001", 20_000)
+    position = accept(session, broker, spread(session).id, "click-0001")
     order_id, _ = broker.last()
     broker.fill(order_id, {SHORT: 2.05, LONG: 1.0})
     sync_orders(session, broker)
@@ -128,7 +154,7 @@ def test_accepting_sends_the_opening_order_at_the_mid_credit(session: Session) -
     broker = FakeBroker()
     opportunity = spread(session)
 
-    position = accept_opportunity(session, broker, opportunity.id, "click-0001", 20_000)
+    position = accept(session, broker, opportunity.id, "click-0001")
 
     _, request = broker.last()
     assert request.credit and request.limit_price == 1.0 and request.quantity == 2
@@ -146,21 +172,23 @@ def test_a_double_click_sends_one_order(session: Session) -> None:
     broker = FakeBroker()
     opportunity = spread(session)
 
-    first = accept_opportunity(session, broker, opportunity.id, "click-0001", 20_000)
-    second = accept_opportunity(session, broker, opportunity.id, "click-0001", 20_000)
+    first = accept(session, broker, opportunity.id, "click-0001")
+    second = accept(session, broker, opportunity.id, "click-0001")
 
     assert first.id == second.id and len(broker.requests) == 1
     with pytest.raises(DecisionError):
-        accept_opportunity(session, broker, opportunity.id, "click-0002", 20_000)
+        accept(session, broker, opportunity.id, "click-0002")
 
 
-def test_acceptance_rechecks_the_capital_limit(session: Session) -> None:
+def test_acceptance_rechecks_the_portfolio_limits(session: Session) -> None:
     broker = FakeBroker()
     opportunity = spread(session)
 
-    # 50 % of 1 000 leaves 500 of capacity for an 800 trade.
-    with pytest.raises(DecisionError, match="Capital insuffisant"):
-        accept_opportunity(session, broker, opportunity.id, "click-0001", 1_000)
+    # On 1 000 of capital, 800 of max loss breaks the 10 % open loss and 5 % cluster limits.
+    with pytest.raises(DecisionError, match="Entrée bloquée") as error:
+        accept(session, broker, opportunity.id, "click-0001", 1_000)
+    assert "perte maximale ouverte totale" in str(error.value)
+    assert "cluster" in str(error.value) and "collatéral" in str(error.value)
     assert not broker.requests and opportunity.status == OpportunityStatus.PROPOSED
 
 
@@ -183,6 +211,7 @@ def test_api_accept_and_reject(session: Session) -> None:
     try:
         client = TestClient(app)
         first, second = spread(session), spread(session)
+        healthy(session, broker, first.id)
         accepted = client.post(
             f"/opportunities/{first.id}/accept", json={"idempotency_key": "click-0001"}
         )
@@ -242,7 +271,7 @@ def test_the_profit_target_fill_closes_the_position(session: Session) -> None:
 
 def test_an_unfilled_opening_order_cancels_the_position(session: Session) -> None:
     broker = FakeBroker()
-    position = accept_opportunity(session, broker, spread(session).id, "click-0001", 20_000)
+    position = accept(session, broker, spread(session).id, "click-0001")
     order_id, _ = broker.last()
 
     broker.set_status(order_id, "expired")
@@ -256,7 +285,7 @@ def test_a_broker_rejection_cancels_the_position(session: Session) -> None:
     broker = FakeBroker()
     broker.fail_next = BrokerError("insufficient options buying power", 403)
 
-    position = accept_opportunity(session, broker, spread(session).id, "click-0001", 20_000)
+    position = accept(session, broker, spread(session).id, "click-0001")
 
     assert position.status == PositionStatus.CANCELED
     assert events(position) == [PositionEventType.ORDER_REJECTED]
@@ -266,7 +295,7 @@ def test_a_network_failure_is_retried_by_the_next_sync(session: Session) -> None
     broker = FakeBroker()
     broker.fail_next = BrokerError("timeout")
 
-    position = accept_opportunity(session, broker, spread(session).id, "click-0001", 20_000)
+    position = accept(session, broker, spread(session).id, "click-0001")
     [order] = orders(session, position, OrderPurpose.OPEN)
     assert order.status == OrderStatus.NEW and not broker.requests
 
@@ -363,8 +392,9 @@ def test_the_wheel_from_put_assignment_to_shares_called_away(session: Session) -
         0.40,
         1,
         1500,
+        stress_loss=410,
     )
-    csp = accept_opportunity(session, broker, put.id, "click-0001", 20_000)
+    csp = accept(session, broker, put.id, "click-0001")
     broker.fill(broker.last()[0], {SOFI_PUT: 0.40})
     sync_orders(session, broker)
 
@@ -377,6 +407,8 @@ def test_the_wheel_from_put_assignment_to_shares_called_away(session: Session) -
     [stock] = lot.legs
     assert stock.instrument_type == InstrumentType.STOCK and stock.quantity == 100
     assert stock.avg_price == Decimal("14.60") and lot.collateral == Decimal("1500")
+    # Shares: stock to zero as the contractual max loss, a 30 % gap as the stress loss.
+    assert lot.max_loss == Decimal("1460") and lot.stress_loss == Decimal("438.00")
     assert [(lot_.position_id, lot_.shares) for lot_ in share_lots(session)] == [(lot.id, 100)]
 
     call = make_opportunity(
@@ -388,7 +420,7 @@ def test_the_wheel_from_put_assignment_to_shares_called_away(session: Session) -
         1,
         0,
     )
-    cc = accept_opportunity(session, broker, call.id, "click-0002", 20_000)
+    cc = accept(session, broker, call.id, "click-0002")
     assert cc.parent_position_id == lot.id
     broker.fill(broker.last()[0], {SOFI_CALL: 0.30})
     sync_orders(session, broker)

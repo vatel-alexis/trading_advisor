@@ -4,7 +4,8 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 
 import { activateProfile, createProfile, deleteProfile, launchBacktest, saveProfile } from "@/app/actions";
-import type { ActionResult, ParamField, ParamValue, Params, Profile } from "@/lib/api";
+import type { ActionResult, ParamField, ParamValue, Params, Profile, RiskVerdict } from "@/lib/api";
+import { pct } from "@/lib/format";
 
 // Form values are kept as typed by the user (strings for numbers and lists); they are
 // converted back on submit and validated by the API, which answers in French.
@@ -65,6 +66,10 @@ export function ProfileEditor({
   const [newName, setNewName] = useState("");
   const [result, setResult] = useState<ActionResult | null>(null);
   const [pending, startTransition] = useTransition();
+  // Blocking warning before activating a profile that lost money or broke its drawdown limit.
+  const [confirming, setConfirming] = useState(false);
+  const [understood, setUnderstood] = useState(false);
+  const risk = profile.risk;
 
   const dirtyKeys = fields.filter((f) => draft[f.key] !== saved[f.key]).map((f) => f.key);
   const dirty = dirtyKeys.length > 0 || name !== profile.name || description !== (profile.description ?? "");
@@ -81,6 +86,7 @@ export function ProfileEditor({
 
   return (
     <div className="space-y-4">
+      {risk ? <RiskPanel risk={risk} /> : null}
       <div className="grid gap-3 md:grid-cols-[1fr_2fr]">
         <label className="flex flex-col gap-1 text-sm">
           <span className="text-xs opacity-60">Nom</span>
@@ -161,10 +167,12 @@ export function ProfileEditor({
             <button
               disabled={pending || dirty}
               onClick={() =>
-                run(
-                  () => activateProfile(profile.id),
-                  () => router.refresh(),
-                )
+                risk?.blocking
+                  ? setConfirming(true)
+                  : run(
+                      () => activateProfile(profile.id),
+                      () => router.refresh(),
+                    )
               }
               className={SECONDARY}
               title={
@@ -230,6 +238,46 @@ export function ProfileEditor({
           </button>
           {dirty ? <span className="text-xs text-warning">Modifications non enregistrées</span> : null}
         </div>
+        {confirming && risk ? (
+          <div role="alertdialog" className="space-y-2 rounded-xl border border-danger/50 bg-danger/10 p-3 text-sm">
+            <p className="font-semibold text-danger">Activation déconseillée</p>
+            <ul className="list-disc pl-5 text-danger">
+              {risk.reasons.map((r) => (
+                <li key={r}>{r}</li>
+              ))}
+            </ul>
+            <p className="text-xs opacity-70">Source : {risk.source ?? "—"}</p>
+            <label className="flex items-start gap-2">
+              <input
+                type="checkbox"
+                checked={understood}
+                onChange={(e) => setUnderstood(e.target.checked)}
+                className="mt-0.5 h-4 w-4"
+              />
+              <span>Je comprends que ce profil a perdu de l&apos;argent ou dépassé la limite de drawdown en backtest, et je l&apos;active quand même pour le screener.</span>
+            </label>
+            <div className="flex gap-2">
+              <button
+                disabled={pending || !understood}
+                onClick={() =>
+                  run(
+                    () => activateProfile(profile.id, true),
+                    () => {
+                      setConfirming(false);
+                      router.refresh();
+                    },
+                  )
+                }
+                className="rounded-full bg-danger px-4 py-1.5 font-medium text-on-danger disabled:opacity-40"
+              >
+                Activer quand même
+              </button>
+              <button disabled={pending} onClick={() => setConfirming(false)} className={SECONDARY}>
+                Annuler
+              </button>
+            </div>
+          </div>
+        ) : null}
         {result ? (
           <p className={`text-sm ${result.ok ? "text-success" : "text-danger"}`}>
             {pending ? "…" : result.message}
@@ -321,5 +369,40 @@ function FieldInput({
       </span>
       {hint}
     </label>
+  );
+}
+
+// Backtest record of the profile's exact settings, shown above the form.
+function RiskPanel({ risk }: { risk: RiskVerdict }) {
+  const tone =
+    risk.status === "ok"
+      ? "border-success/40 bg-success/10 text-success"
+      : risk.status === "untested"
+        ? "border-line bg-surface text-muted"
+        : "border-danger/50 bg-danger/10 text-danger";
+  const title =
+    risk.status === "ok"
+      ? "Backtest dans les limites"
+      : risk.status === "untested"
+        ? "Non testé avec ces réglages exacts"
+        : risk.status === "deficit"
+          ? "Profil historiquement déficitaire"
+          : "Drawdown au-delà de la limite";
+  return (
+    <div className={`rounded-2xl border p-3 text-sm ${tone}`}>
+      <div className="font-semibold">{title}</div>
+      {risk.cagr != null || risk.max_drawdown != null ? (
+        <div className="text-xs">
+          {pct(risk.cagr)}/an · drawdown {pct(risk.max_drawdown)} · {risk.source}
+        </div>
+      ) : null}
+      {risk.status !== "ok"
+        ? risk.reasons.map((r) => (
+            <div key={r} className="text-xs">
+              {r}
+            </div>
+          ))
+        : null}
+    </div>
   );
 }

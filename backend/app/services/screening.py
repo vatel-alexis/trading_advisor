@@ -1,7 +1,6 @@
 """Daily screener run: market data in, screener_runs, opportunities and iv_history out."""
 
 import logging
-from collections import Counter
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Protocol
@@ -14,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.domain.exits import stop_price, take_profit_price
 from app.domain.market import MarketSnapshot
 from app.domain.params import StrategyParams
-from app.domain.risk import AccountState
+from app.domain.risk import NO_TRADE_MESSAGES, AccountState, cluster_of
 from app.domain.screener import Candidate, ScreenResult, ShareLot, screen
 from app.models import (
     IvHistory,
@@ -33,6 +32,7 @@ from app.models.enums import (
     Side,
     StrategyType,
 )
+from app.services.safety import SCREENER, open_exposures, record_job
 
 logger = logging.getLogger(__name__)
 
@@ -103,13 +103,6 @@ def open_underlyings(session: Session) -> set[str]:
     )
 
 
-def open_sectors(session: Session) -> Counter:
-    rows = session.scalars(
-        select(Position.sector).where(Position.status.in_(ACTIVE), Position.sector.is_not(None))
-    ).all()
-    return Counter(rows)
-
-
 def cooling_down(session: Session, today: date, days: int) -> set[str]:
     """Underlyings whose last position closed less than `days` market days ago (calendar)."""
     if days <= 0:
@@ -166,6 +159,9 @@ def _opportunity(
         "credit_total": round(c.credit * 100 * c.quantity, 2),
         "max_loss_per_unit": round(c.max_loss, 2),
         "collateral_per_unit": round(c.collateral, 2),
+        "stress_loss_per_unit": round(c.stress_loss, 2),
+        "cluster": cluster_of(c.underlying, c.sector, params),
+        "sizing": c.sizing.to_dict() if c.sizing else None,
         "iv30": c.iv30,
         "hv30": c.hv30,
         "iv_rank_method": c.iv_rank.method if c.iv_rank else None,
@@ -197,6 +193,7 @@ def _opportunity(
         credit=_dec(c.credit),
         max_loss=_dec(c.max_loss * c.quantity, 2),
         collateral=_dec(c.collateral * c.quantity, 2),
+        stress_loss=_dec(c.stress_loss * c.quantity, 2),
         breakeven=_dec(c.breakeven),
         short_delta=_dec(c.short_delta, 6),
         pop=_dec(c.pop, 6),
@@ -258,7 +255,7 @@ def run_screener(
         iv_history(session, today),
         lots,
         open_underlyings(session),
-        open_sectors(session),
+        open_exposures(session, params),
         cooling_down(session, today, params.reentry_cooldown_days),
     )
 
@@ -276,8 +273,19 @@ def run_screener(
         **result.funnel,
         "covered_calls": len(result.covered_calls),
         "skipped": result.skipped,
+        # Exact NO TRADE reason of every ranked candidate that got no contract.
+        "no_trade": {
+            symbol: NO_TRADE_MESSAGES.get(code, code) for symbol, code in result.skipped.items()
+        },
         "errors": errors,
     }
     run.finished_at = datetime.now(UTC)
+    record_job(
+        session,
+        SCREENER,
+        ok=len(errors) < len(symbols) or not symbols,
+        error=None if len(errors) < len(symbols) else "aucune donnée de marché reçue",
+        details={"run_id": run.id, "errors": len(errors), "selected": len(result.selected)},
+    )
     session.flush()
     return run

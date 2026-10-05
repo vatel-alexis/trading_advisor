@@ -13,6 +13,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.domain.params import StrategyParams
+from app.domain.risk import Portfolio
 from app.models import (
     Decision,
     Opportunity,
@@ -33,6 +34,7 @@ from app.models.enums import (
     Side,
     StrategyType,
 )
+from app.services.safety import losses, open_exposures
 from app.services.screening import ACTIVE, account_state, active_config
 from app.services.trading import LIVE
 
@@ -103,7 +105,33 @@ def dashboard(
         .where(Opportunity.status == OpportunityStatus.PROPOSED)
     )
     last_run = session.scalar(select(func.max(ScreenerRun.finished_at)))
+    today = today or datetime.now(MARKET_TZ).date()
+    unrealized = round(sum(float(m.unrealized_pnl) for m in marks.values()), 2)
+    book = Portfolio(account.capital, tuple(open_exposures(session, params)))
+    state = losses(session, starting_capital, today, account.capital + unrealized)
     return {
+        # Kept apart: cash held by the broker, what the contracts can lose at most, and what
+        # a gap down by the stress move would cost.
+        "cash_available": round(account.capital - book.engaged, 2),
+        "collateral": round(book.engaged, 2),
+        "open_max_loss": round(book.open_max_loss, 2),
+        "open_max_loss_limit": round(account.capital * params.max_open_risk_pct, 2),
+        "stress_loss": round(book.stress_loss, 2),
+        "clusters": [
+            {"cluster": key, "risk": round(value, 2)}
+            for key, value in sorted(book.clusters(params).items(), key=lambda kv: -kv[1])
+        ],
+        "cluster_limit": round(account.capital * params.max_cluster_risk_pct, 2),
+        "equity": round(state.equity, 2),
+        "daily_change": round(state.daily, 4),
+        "monthly_change": round(state.monthly, 4),
+        "drawdown": round(state.drawdown, 4),
+        "limits": {
+            "daily_loss": params.max_daily_loss_pct,
+            "monthly_loss": params.max_monthly_loss_pct,
+            "drawdown": params.max_drawdown_pct,
+            "trade_risk": params.max_trade_risk_pct,
+        },
         "starting_capital": float(starting_capital),
         "realized_pnl": round(account.capital - float(starting_capital), 2),
         "capital": round(account.capital, 2),
@@ -112,12 +140,12 @@ def dashboard(
         "max_engaged_pct": params.max_engaged_pct,
         "max_trade_pct": params.max_trade_pct,
         "engagement_capacity": round(account.remaining_capacity(params), 2),
-        "unrealized_pnl": round(sum(float(m.unrealized_pnl) for m in marks.values()), 2),
+        "unrealized_pnl": unrealized,
         "open_positions": counts.get(PositionStatus.OPEN, 0),
         "pending_positions": counts.get(PositionStatus.PENDING, 0),
         "proposed_opportunities": proposed or 0,
         "last_screener_run": _iso(last_run),
-        "analytics": analytics(session, starting_capital, today or datetime.now(MARKET_TZ).date()),
+        "analytics": analytics(session, starting_capital, today),
     }
 
 
@@ -293,6 +321,20 @@ def _opportunity(o: Opportunity, capital: float) -> dict[str, Any]:
         "credit_total": round(credit_total, 2),
         "max_loss": max_loss,
         "collateral": float(o.collateral),
+        "stress_loss": _f(o.stress_loss),
+        "risk_pct": round(
+            (
+                float(o.stress_loss)
+                if o.strategy_type == StrategyType.CASH_SECURED_PUT and o.stress_loss is not None
+                else max_loss
+            )
+            / capital,
+            4,
+        )
+        if capital > 0
+        else None,
+        "sizing": metrics.get("sizing"),
+        "cluster": metrics.get("cluster"),
         "weight": round(float(o.collateral) / capital, 4) if capital > 0 else None,
         "breakeven": float(o.breakeven),
         "delta": float(o.short_delta),

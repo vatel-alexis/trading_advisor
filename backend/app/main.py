@@ -16,8 +16,10 @@ from app.broker import Broker
 from app.broker.alpaca import AlpacaBroker
 from app.config import get_settings
 from app.db import get_session
+from app.domain.params import StrategyParams
+from app.models import StrategyProfile
 from app.models.enums import OpportunityStatus, RejectReason
-from app.services import lab, views
+from app.services import lab, safety, views
 from app.services.trading import (
     DecisionError,
     accept_opportunity,
@@ -68,6 +70,20 @@ def health(session: DbSession) -> dict[str, str]:
 
 def market_today() -> date:
     return datetime.now(ZoneInfo("America/New_York")).date()
+
+
+@app.get("/status")
+def get_status(session: DbSession) -> dict[str, object]:
+    """The permanent banner: active profile, PAPER, worker, data, monitor, trading allowed."""
+    config = lab.active_config(session)
+    profile = session.get(StrategyProfile, config.profile_id) if config.profile_id else None
+    params = StrategyParams.from_dict(config.params)
+    return {
+        **safety.status(session, params, settings.starting_capital),
+        "profile": profile.name if profile else None,
+        "profile_version": config.version,
+        "broker_env": settings.broker_env,
+    }
 
 
 @app.get("/dashboard")
@@ -200,6 +216,12 @@ class ProfileUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=80)
     description: str | None = Field(default=None, max_length=500)
     params: dict[str, Any] | None = None
+    # Required to (re)activate a profile whose backtest lost money or broke its drawdown limit.
+    confirm_risk: bool = False
+
+
+class ActivateRequest(BaseModel):
+    confirm_risk: bool = False
 
 
 @app.get("/profiles")
@@ -208,7 +230,9 @@ def get_profiles(session: DbSession) -> dict[str, object]:
 
 
 def _profile_out(session: Session, profile) -> dict[str, object]:
-    return lab.profile_view(profile, lab.active_config(session).profile_id)
+    return lab.profile_view(
+        profile, lab.active_config(session).profile_id, lab.risk_verdict(session, profile)
+    )
 
 
 @app.post("/profiles")
@@ -225,16 +249,20 @@ def create_profile(body: ProfileCreate, session: DbSession) -> dict[str, object]
 @app.put("/profiles/{profile_id}")
 def update_profile(profile_id: int, body: ProfileUpdate, session: DbSession) -> dict[str, object]:
     def call():
-        profile = lab.update_profile(session, profile_id, body.name, body.description, body.params)
+        profile = lab.update_profile(
+            session, profile_id, body.name, body.description, body.params, body.confirm_risk
+        )
         return _profile_out(session, profile)
 
     return _lab(call, session)
 
 
 @app.post("/profiles/{profile_id}/activate")
-def activate_profile(profile_id: int, session: DbSession) -> dict[str, object]:
+def activate_profile(
+    profile_id: int, session: DbSession, body: ActivateRequest | None = None
+) -> dict[str, object]:
     def call():
-        config = lab.activate_profile(session, profile_id)
+        config = lab.activate_profile(session, profile_id, bool(body and body.confirm_risk))
         return {"profile_id": profile_id, "version": config.version}
 
     return _lab(call, session)

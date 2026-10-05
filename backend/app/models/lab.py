@@ -33,6 +33,9 @@ class StrategyProfile(Timestamped, Base):
     description: Mapped[str | None] = mapped_column(String(500))
     params: Mapped[dict[str, Any]] = mapped_column(JSON)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # Documented backtest of these exact parameters (cagr, max_drawdown, source), used for the
+    # activation warning until a backtest run of the profile exists; cleared on any change.
+    reference_summary: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
 
 class BacktestRun(Timestamped, Base):

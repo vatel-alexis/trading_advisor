@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 
 import { NavLinks } from "@/components/NavLinks";
+import { StatusBanner } from "@/components/StatusBanner";
 import "./globals.css";
 
 // Same type families as the CV site.
@@ -47,6 +48,7 @@ export default function RootLayout({
             </span>
             <NavLinks />
           </nav>
+          <StatusBanner />
         </header>
         <main className="mx-auto max-w-6xl px-4 pt-6 pb-[max(3rem,env(safe-area-inset-bottom))] md:pt-10">
           {children}

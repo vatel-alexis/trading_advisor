@@ -73,13 +73,16 @@ export function OpportunityCard({ deal }: { deal: Opportunity }) {
         <Row label="AROC" value={pct(deal.aroc)} />
         <Row label="Crédit" value={`${price(deal.credit)} × ${deal.quantity}`} />
         <Row label="Prime totale" value={usd(deal.credit_total)} />
-        <Row label="Capital requis" value={usd(deal.collateral)} />
-        <Row label="Poids" value={pct(deal.weight)} />
+        <Row label="Collatéral" value={usd(deal.collateral)} />
+        <Row label="Risque / capital" value={pct(deal.risk_pct)} />
         <Row label="Objectif de gain" value={`${usd(deal.take_profit_gain)}`} />
         <Row label="Perte max" value={usd(deal.max_loss)} />
+        <Row label="Stress loss" value={usd(deal.stress_loss)} />
+        <Row label="Cluster" value={deal.cluster ?? "—"} />
         <Row label="Point mort" value={price(deal.breakeven)} />
         <Row label="IV Rank" value={deal.iv_rank == null ? "—" : deal.iv_rank.toFixed(0)} />
       </dl>
+      {deal.sizing ? <SizingDetails sizing={deal.sizing} /> : null}
       <p className="mt-2 text-xs opacity-60">
         {deal.take_profit_price != null ? `Rachat auto à ${price(deal.take_profit_price)}` : "Pas d'objectif de gain"}
         {deal.stop_price != null ? `, stop à ${price(deal.stop_price)}` : ", pas de stop"}
@@ -181,5 +184,33 @@ export function OpportunityCard({ deal }: { deal: Opportunity }) {
         {result && !result.ok ? <p className="mt-2 text-sm text-danger">{result.message}</p> : null}
       </div>
     </article>
+  );
+}
+
+const CAP_LABEL: Record<string, string> = {
+  risk_budget: "Budget de risque du trade",
+  open_risk_limit: "Perte max ouverte totale",
+  cluster_limit: "Limite du cluster corrélé",
+  capital_limit: "Collatéral disponible",
+};
+
+// "Why this number of contracts?": floor(budget / risk of one contract), then every portfolio cap.
+function SizingDetails({ sizing }: { sizing: NonNullable<Opportunity["sizing"]> }) {
+  return (
+    <details className="mt-2 text-xs">
+      <summary className="cursor-pointer text-accent">Pourquoi ce nombre de contrats ?</summary>
+      <p className="mt-1 opacity-80">
+        Budget de risque {usd(sizing.risk_budget)} / risque d&apos;un contrat {usd(sizing.risk_per_contract)} = arrondi
+        inférieur {sizing.caps.risk_budget ?? "—"}. Chaque limite du portefeuille, positions ouvertes comprises :
+      </p>
+      <ul className="mt-1 space-y-0.5">
+        {Object.entries(sizing.caps).map(([key, value]) => (
+          <li key={key} className={key === sizing.binding ? "font-semibold" : "opacity-70"}>
+            {CAP_LABEL[key] ?? key} : {value >= 1_000_000 ? "sans limite" : `${value} contrat(s)`}
+            {key === sizing.binding ? " ← limite retenue" : ""}
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }

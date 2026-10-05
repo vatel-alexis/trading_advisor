@@ -10,9 +10,9 @@ from app.main import app
 from app.models import Position
 from app.models.enums import ExitReason, PositionStatus, StrategyType
 from app.services import views
-from app.services.trading import accept_opportunity, close_position, sync_orders
+from app.services.trading import close_position, sync_orders
 from tests.fake_broker import FakeBroker
-from tests.test_trading_service import LONG, SHORT, open_spread, spread
+from tests.test_trading_service import LONG, SHORT, accept, open_spread, spread
 
 
 def market_today() -> date:
@@ -25,7 +25,7 @@ def test_win_rate_premiums_and_curve_from_two_spreads(session: Session) -> None:
     broker.fill(broker.last()[0], {SHORT: 0.60, LONG: 0.08})  # profit target at 0.52
     sync_orders(session, broker)
 
-    loser = accept_opportunity(session, broker, spread(session).id, "click-0002", 20_000)
+    loser = accept(session, broker, spread(session).id, "click-0002")
     broker.fill(broker.last()[0], {SHORT: 2.05, LONG: 1.0})
     sync_orders(session, broker)
     broker.quotes = {SHORT: Quote(1.9, 2.0), LONG: Quote(0.45, 0.5)}

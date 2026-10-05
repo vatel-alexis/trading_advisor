@@ -30,6 +30,7 @@ from app.domain.orders import (
     realized_pnl,
 )
 from app.domain.params import StrategyParams
+from app.domain.risk import NO_TRADE_MESSAGES, Exposure, Portfolio, check_limits
 from app.models import (
     Decision,
     Fill,
@@ -54,7 +55,16 @@ from app.models.enums import (
     Side,
     StrategyType,
 )
-from app.services.screening import account_state, active_config, open_underlyings, share_lots
+from app.services.safety import (
+    MONITOR,
+    entry_gate,
+    open_exposures,
+    realized_capital,
+    record_equity,
+    record_job,
+    share_lot_risk,
+)
+from app.services.screening import active_config, share_lots
 
 logger = logging.getLogger(__name__)
 
@@ -146,8 +156,10 @@ def accept_opportunity(
 ) -> Position:
     """Record the acceptance, open a pending position and send the opening order.
 
-    The limit is the screener's mid credit unless `limit_price` overrides it. Risk limits are
-    checked again: other deals may have been accepted since the screener sized this one.
+    The limit is the screener's mid credit unless `limit_price` overrides it. Nothing is sent
+    while an entry check fails: the safety gate (worker, monitor, data, broker, market, loss
+    limits), fresh quotes for every leg close to the proposal, and the portfolio limits with
+    the open and pending positions (other deals may have been accepted since the screening).
     """
     decision = _existing_decision(session, opportunity_id, idempotency_key)
     if decision is not None:
@@ -159,6 +171,7 @@ def accept_opportunity(
 
     opportunity = _proposed(session, opportunity_id)
     quantity = opportunity.legs[0].quantity
+    _check_entry(session, broker, opportunity, starting_capital)
     parent_id = None
     if opportunity.strategy_type == StrategyType.COVERED_CALL:
         lot = next(
@@ -172,17 +185,6 @@ def accept_opportunity(
         if lot is None:
             raise DecisionError("Plus assez d'actions non couvertes pour ce covered call.")
         parent_id = lot.position_id
-    else:
-        if opportunity.underlying in open_underlyings(session):
-            raise DecisionError(f"Une position est déjà ouverte sur {opportunity.underlying}.")
-        config = session.get(StrategyConfig, opportunity.strategy_config_id)
-        params = StrategyParams.from_dict(config.params)
-        capacity = account_state(session, starting_capital).remaining_capacity(params)
-        if float(opportunity.collateral) > capacity + 0.01:
-            raise DecisionError(
-                f"Capital insuffisant : {float(opportunity.collateral):.0f} requis, "
-                f"{capacity:.0f} disponibles sous la limite d'engagement."
-            )
 
     session.add(
         Decision(
@@ -202,6 +204,7 @@ def accept_opportunity(
         status=PositionStatus.PENDING,
         collateral=opportunity.collateral,
         max_loss=opportunity.max_loss,
+        stress_loss=opportunity.stress_loss,
         legs=[
             PositionLeg(
                 instrument_type=InstrumentType.OPTION,
@@ -231,6 +234,68 @@ def accept_opportunity(
     submit_order(session, broker, order)
     session.commit()
     return position
+
+
+def _check_entry(
+    session: Session, broker: Broker, opportunity: Opportunity, starting_capital: float
+) -> None:
+    """Raise a DecisionError listing every reason the entry cannot be sent now."""
+    params = StrategyParams.from_dict(active_config(session).params)
+    covered_call = opportunity.strategy_type == StrategyType.COVERED_CALL
+    market_open, broker_error, quotes = None, None, {}
+    symbols = [leg.option_symbol for leg in opportunity.legs]
+    try:
+        market_open = broker.market_is_open()
+        quotes = broker.option_quotes(symbols)
+    except BrokerError as exc:
+        broker_error = str(exc)[:200]
+    gate = entry_gate(
+        session,
+        params,
+        starting_capital,
+        market_open=market_open,
+        broker_error=broker_error,
+        risk_increasing=not covered_call,
+    )
+    reasons = list(gate.reasons)
+
+    if broker_error is None:
+        missing = [s for s in symbols if s not in quotes or quotes[s].ask <= 0]
+        if missing:
+            reasons.append(f"Donnée absente : pas de cotation pour {', '.join(missing)}")
+        else:
+            legs = [(leg.option_symbol, leg.side.value) for leg in opportunity.legs]
+            mid = sum(
+                quotes[sym].mid if side == Side.SELL else -quotes[sym].mid for sym, side in legs
+            )
+            proposed = float(opportunity.credit)
+            if mid < proposed * (1 - params.max_credit_drift_pct):
+                reasons.append(
+                    f"Données obsolètes : crédit coté {mid:.2f} contre {proposed:.2f} proposé "
+                    f"(écart max {params.max_credit_drift_pct:.0%})"
+                )
+
+    if not covered_call:
+        exposure = Exposure(
+            underlying=opportunity.underlying,
+            sector=opportunity.sector,
+            strategy=opportunity.strategy_type.value,
+            max_loss=float(opportunity.max_loss),
+            stress_loss=float(
+                opportunity.stress_loss
+                if opportunity.stress_loss is not None
+                else opportunity.max_loss
+            ),
+            collateral=float(opportunity.collateral),
+            expiration=opportunity.expiration,
+        )
+        book = Portfolio(
+            realized_capital(session, starting_capital), tuple(open_exposures(session, params))
+        )
+        reasons += [NO_TRADE_MESSAGES[code] for code in check_limits(exposure, book, params)]
+
+    if reasons:
+        raise DecisionError("Entrée bloquée : " + " ; ".join(reasons) + ".")
 
 
 def reject_opportunity(
@@ -717,6 +782,8 @@ def _put_assigned(
         position.exit_debit = Decimal("0")
         position.realized_pnl = position.realized_pnl or Decimal("0")
         position.closed_at = _now()
+    params = _params(session, position)
+    cost = strike - credit
     lot = Position(
         parent_position_id=position.id,
         underlying=position.underlying,
@@ -725,6 +792,9 @@ def _put_assigned(
         status=PositionStatus.OPEN,
         opened_at=_now(),
         collateral=strike * shares,
+        # Contractual: the stock going to zero; stress: the stock gapping down.
+        max_loss=cost * shares,
+        stress_loss=_dec(share_lot_risk(float(cost), shares, params, position.underlying), 2),
         legs=[
             PositionLeg(
                 instrument_type=InstrumentType.STOCK,
@@ -791,20 +861,57 @@ def _call_assigned(
 # --- the monitor job ------------------------------------------------------------------------
 
 
-def monitor(session: Session, broker: Broker, today: date) -> None:
+def monitor(
+    session: Session, broker: Broker, today: date, starting_capital: float | None = None
+) -> bool:
     """One pass of the position monitor. Exit rules only run while the market is open.
 
-    A failing step is logged and rolled back without blocking the next ones.
+    A failing step is logged and rolled back without blocking the next ones. The pass is
+    recorded (the entry gate needs a recent successful one), with the account value of the
+    day when `starting_capital` is given. Returns False if a step failed.
     """
+    state: dict[str, Any] = {"market_open": None}
+
+    def exits_step() -> None:
+        state["market_open"] = broker.market_is_open()
+        if state["market_open"]:
+            check_exits(session, broker, today)
+
     steps = [
         ("orders", lambda: sync_orders(session, broker)),
         ("activities", lambda: sync_activities(session, broker, today)),
-        ("exits", lambda: broker.market_is_open() and check_exits(session, broker, today)),
+        ("exits", exits_step),
     ]
+    failed: list[str] = []
+    broker_error = None
     for name, step in steps:
         try:
             step()
             session.commit()
-        except Exception:
+        except Exception as exc:
             logger.exception("monitor step %s failed", name)
             session.rollback()
+            failed.append(name)
+            if isinstance(exc, BrokerError):
+                broker_error = str(exc)[:200]
+    if starting_capital is not None:
+        try:
+            record_equity(session, starting_capital, today)
+        except Exception:
+            logger.exception("account snapshot failed")
+            session.rollback()
+            failed.append("equity")
+    record_job(
+        session,
+        MONITOR,
+        ok=not failed,
+        error=f"étapes en échec : {', '.join(failed)}" if failed else None,
+        details={
+            "market_open": state["market_open"],
+            "broker_ok": broker_error is None and state["market_open"] is not None,
+            "broker_error": broker_error,
+            "failed_steps": failed,
+        },
+    )
+    session.commit()
+    return not failed

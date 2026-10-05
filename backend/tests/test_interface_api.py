@@ -74,6 +74,7 @@ def test_an_unfilled_manual_close_puts_the_profit_target_back(session: Session) 
 def test_manual_close_is_refused_when_it_cannot_be_priced(session: Session) -> None:
     broker = FakeBroker()
     position = open_spread(session, broker)
+    broker.quotes = {}  # the entry quotes are gone: nothing to price the buy-back with
 
     with pytest.raises(DecisionError, match="cotation"):
         close_position(session, broker, position.id, "close-0001")
@@ -98,6 +99,12 @@ def test_dashboard_and_positions_show_capital_and_the_last_mark(session: Session
     assert board["engaged"] == 800 and board["available"] == 19_200
     assert board["engagement_capacity"] == 9_200  # 50 % of 20 000, minus 800
     assert board["open_positions"] == 1 and board["unrealized_pnl"] == 90.0
+    # Collateral, contractual max loss and stress loss are reported apart.
+    assert board["collateral"] == 800 and board["cash_available"] == 19_200
+    assert board["open_max_loss"] == 800 and board["open_max_loss_limit"] == 2_000
+    assert board["stress_loss"] == 800
+    assert board["clusters"] == [{"cluster": "Indices US (SPY/QQQ/IWM)", "risk": 800}]
+    assert board["equity"] == 20_090 and board["drawdown"] == 0
 
     [row] = views.positions(session, TODAY)["options"]
     assert row["id"] == position.id and row["mark"] == 0.6
@@ -116,6 +123,7 @@ def test_opportunity_cards_carry_weight_ror_and_target(session: Session) -> None
 
     assert card["id"] == opportunity.id and card["short_strike"] == 500
     assert card["weight"] == 0.04  # 800 / 20 000
+    assert card["risk_pct"] == 0.04 and card["stress_loss"] == 800
     assert card["credit_total"] == 200 and card["ror"] == 0.25
     assert card["take_profit_gain"] == 100.0
 

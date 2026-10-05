@@ -14,7 +14,16 @@ from datetime import date
 from app.domain.market import IvRank, MarketSnapshot, OptionQuote, atm_iv30, hv30, iv_rank
 from app.domain.params import StrategyParams
 from app.domain.pricing import bs_delta, prob_above, spread_pct
-from app.domain.risk import AccountState, size_position
+from app.domain.risk import (
+    AccountState,
+    Exposure,
+    Portfolio,
+    Sizing,
+    put_spread_stress_loss,
+    short_put_stress_loss,
+    size_deal,
+    stress_move,
+)
 
 PUT_CREDIT_SPREAD = "put_credit_spread"
 CASH_SECURED_PUT = "cash_secured_put"
@@ -58,9 +67,11 @@ class Candidate:
     # Per share, at mid. The natural credit (sell at bid, buy at ask) is the worst fill.
     credit: float
     natural_credit: float
-    # Per unit (one spread, one contract), in dollars.
+    # Per unit (one spread, one contract), in dollars: contractual max loss, cash held by the
+    # broker, and the loss if the underlying gaps down by the stress move.
     max_loss: float
     collateral: float
+    stress_loss: float
     breakeven: float
     short_delta: float
     pop: float
@@ -71,6 +82,7 @@ class Candidate:
     next_earnings: date | None
     score: float = 0.0
     quantity: int = 0
+    sizing: Sizing | None = None
 
     @property
     def short_leg(self) -> Leg:
@@ -193,7 +205,10 @@ def _put_trades(
     today: date,
     p: StrategyParams,
     funnel: Counter,
+    capital: float,
 ) -> list[Candidate]:
+    """Every put trade passing the filters. Spreads take the first width whose max loss fits
+    the risk budget of one trade (else the first usable width, which then gets no contract)."""
     puts = [q for q in snap.options if q.option_type == "put"]
     if group == "wheel":
         puts = [q for q in puts if q.strike <= p.wheel_max_strike]
@@ -228,6 +243,9 @@ def _put_trades(
     funnel["earnings"] += len(rows)
 
     by_key = {(q.expiration, q.strike): q for q in puts}
+    sector = "ETF" if group == "etf" else snap.sector
+    move = stress_move(snap.symbol, sector, p)
+    unit_budget = capital * p.max_trade_risk_pct
     trades: list[Candidate] = []
     for short in rows:
         dte = (short.expiration - today).days
@@ -241,9 +259,10 @@ def _put_trades(
             natural = short.bid
             max_loss = (short.strike - credit) * 100
             collateral = short.strike * 100
+            stress = short_put_stress_loss(snap.spot, short.strike, credit, move)
             strategy = CASH_SECURED_PUT
         else:
-            spread = _build_spread(short, by_key, p)
+            spread = _build_spread(short, by_key, p, unit_budget)
             if spread is None:
                 continue
             long, width = spread
@@ -253,13 +272,14 @@ def _put_trades(
             legs = [short_leg, Leg(long, "buy", long_delta)]
             max_loss = (width - credit) * 100
             collateral = max_loss
+            stress = put_spread_stress_loss(snap.spot, short.strike, long.strike, credit, move)
             strategy = PUT_CREDIT_SPREAD
         breakeven = short.strike - credit
         trades.append(
             Candidate(
                 underlying=snap.symbol,
                 group=group,
-                sector="ETF" if group == "etf" else snap.sector,
+                sector=sector,
                 strategy=strategy,
                 expiration=short.expiration,
                 dte=dte,
@@ -269,6 +289,7 @@ def _put_trades(
                 natural_credit=natural,
                 max_loss=max_loss,
                 collateral=collateral,
+                stress_loss=stress,
                 breakeven=breakeven,
                 short_delta=short_leg.delta,
                 pop=prob_above(snap.spot, breakeven, years, short.iv, p.risk_free_rate),
@@ -286,9 +307,14 @@ def _put_trades(
 
 
 def _build_spread(
-    short: OptionQuote, by_key: Mapping[tuple[date, float], OptionQuote], p: StrategyParams
+    short: OptionQuote,
+    by_key: Mapping[tuple[date, float], OptionQuote],
+    p: StrategyParams,
+    unit_budget: float = float("inf"),
 ) -> tuple[OptionQuote, float] | None:
-    """Long put `width` below the short, first width in preference order with a usable leg."""
+    """Long put `width` below the short: the first width in preference order with a usable
+    leg and a max loss within `unit_budget`, else the first usable width."""
+    fallback = None
     for width in p.spread_widths:
         long = by_key.get((short.expiration, short.strike - width))
         if long is None or long.ask <= 0:
@@ -298,8 +324,10 @@ def _build_spread(
         credit = short.mid - long.mid
         if credit < p.min_credit or short.bid - long.ask <= 0 or credit >= width:
             continue
-        return long, width
-    return None
+        if (width - credit) * 100 <= unit_budget:
+            return long, width
+        fallback = fallback or (long, width)
+    return fallback
 
 
 def _covered_call(
@@ -336,6 +364,7 @@ def _covered_call(
                 natural_credit=q.bid,
                 max_loss=0.0,
                 collateral=0.0,
+                stress_loss=0.0,
                 breakeven=breakeven,
                 short_delta=delta,
                 pop=prob_above(snap.spot, breakeven, years, q.iv, p.risk_free_rate),
@@ -349,6 +378,19 @@ def _covered_call(
         )
     _assign_scores(calls, p)
     return max(calls, key=lambda c: c.score, default=None)
+
+
+def exposure_of(c: Candidate) -> Exposure:
+    """A sized candidate as a portfolio exposure (totals over its quantity)."""
+    return Exposure(
+        underlying=c.underlying,
+        sector=c.sector,
+        strategy=c.strategy,
+        max_loss=c.max_loss * c.quantity,
+        stress_loss=c.stress_loss * c.quantity,
+        collateral=c.collateral * c.quantity,
+        expiration=c.expiration,
+    )
 
 
 def underlying_stats(
@@ -367,14 +409,15 @@ def screen(
     iv_history: Mapping[str, Sequence[float]] | None = None,
     share_lots: Sequence[ShareLot] = (),
     open_underlyings: set[str] | frozenset[str] = frozenset(),
-    open_sectors: Mapping[str, int] | None = None,
+    exposures: Sequence[Exposure] = (),
     cooling_down: set[str] | frozenset[str] = frozenset(),
 ) -> ScreenResult:
     """Run the full funnel and pick at most `max_deals` new trades that fit the risk limits.
 
     `iv_history` holds past daily IV30 values per underlying (today excluded).
     `open_underlyings` already have a position: no second entry on them.
-    `open_sectors` counts open positions per sector, used when the sector limit includes them.
+    `exposures` are the open and pending positions: every limit (open max loss, clusters,
+    sectors, collateral) counts them along with the day's new deals.
     `cooling_down` had a position closed within `reentry_cooldown_days`.
     """
     iv_history = iv_history or {}
@@ -386,7 +429,9 @@ def screen(
         group = params.group_of(snap.symbol)
         if group is None:
             continue
-        trades.extend(_put_trades(snap, group, stats[snap.symbol], today, params, funnel))
+        trades.extend(
+            _put_trades(snap, group, stats[snap.symbol], today, params, funnel, account.capital)
+        )
 
     _assign_scores(trades, params)
     best: dict[str, Candidate] = {}
@@ -398,29 +443,44 @@ def screen(
 
     selected: list[Candidate] = []
     skipped: dict[str, str] = {}
-    sectors: Counter = Counter()
-    if params.sector_limit_includes_open:
-        sectors.update(open_sectors or {})
+    # Collateral the caller counts in `account` but that no exposure carries.
+    other = max(0.0, account.engaged - sum(e.collateral for e in exposures))
+    portfolio = Portfolio(account.capital, tuple(exposures), other)
+    held = set(open_underlyings) | portfolio.underlyings
     for c in ranked:
         if len(selected) >= params.max_deals:
             skipped[c.underlying] = "max_deals"
             continue
-        if c.underlying in open_underlyings:
+        if c.underlying in held:
             skipped[c.underlying] = "already_open"
             continue
         if c.underlying in cooling_down:
             skipped[c.underlying] = "cooldown"
             continue
-        if params.use_sector_limit and c.sector and sectors[c.sector] >= params.max_per_sector:
+        if (
+            params.use_sector_limit
+            and c.sector
+            and portfolio.sector_count(c.sector) >= params.max_per_sector
+        ):
             skipped[c.underlying] = "sector_limit"
             continue
-        quantity = size_position(c.collateral, account, params)
-        if quantity == 0:
-            skipped[c.underlying] = "capital_limit"
+        c.sizing = size_deal(
+            underlying=c.underlying,
+            sector=c.sector,
+            strategy=c.strategy,
+            max_loss=c.max_loss,
+            stress_loss=c.stress_loss,
+            collateral=c.collateral,
+            portfolio=portfolio,
+            params=params,
+            score=c.score,
+        )
+        if c.sizing.quantity == 0:
+            skipped[c.underlying] = c.sizing.no_trade or "risk_budget"
             continue
-        c.quantity = quantity
-        account = account.with_engaged(quantity * c.collateral)
-        sectors[c.sector] += 1
+        c.quantity = c.sizing.quantity
+        portfolio = portfolio.with_exposure(exposure_of(c))
+        held.add(c.underlying)
         selected.append(c)
     funnel["selected"] = len(selected)
 

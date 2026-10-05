@@ -1,8 +1,9 @@
 """Strategy and risk parameters. Stored as JSON in strategy_configs, one version per change.
 
 Every filter and exit rule has an on/off switch (`use_*`), so a settings profile can include or
-exclude it without losing its threshold. The defaults reproduce the strategy validated after
-the Sprint 0 spike; the new indicators (trend, IV/HV) start switched off.
+exclude it without losing its threshold. The defaults are the "Prudent" profile (ETFs and the
+wheel, 40-55 DTE, delta 0.10-0.20) with conservative risk limits: the former defaults lost
+19 %/year in the 2019-2026 backtest. The optional indicators (trend, IV/HV) start switched off.
 """
 
 from dataclasses import asdict, dataclass, fields
@@ -24,7 +25,8 @@ WHEEL = (
 class StrategyParams:
     # Universe: put credit spreads on ETFs and large caps, the wheel on cheap stocks.
     enable_etfs: bool = True
-    enable_large_caps: bool = True
+    # Large caps lost money in every backtest variant: off by default.
+    enable_large_caps: bool = False
     enable_wheel: bool = True
     etfs: tuple[str, ...] = ETFS
     large_caps: tuple[str, ...] = LARGE_CAPS
@@ -32,10 +34,10 @@ class StrategyParams:
     wheel_max_strike: float = 20.0
 
     # Contract filters (thresholds validated after the Sprint 0 spike).
-    dte_min: int = 25
+    dte_min: int = 40
     dte_max: int = 55
-    delta_min: float = 0.15
-    delta_max: float = 0.30
+    delta_min: float = 0.10
+    delta_max: float = 0.20
     use_open_interest_filter: bool = True
     min_open_interest: int = 100
     use_volume_filter: bool = True
@@ -57,20 +59,46 @@ class StrategyParams:
     use_iv_hv_filter: bool = False
     min_iv_hv_ratio: float = 1.0
 
-    # Spread construction: long leg this many dollars below the short leg, first width found.
-    spread_widths: tuple[float, ...] = (5.0, 10.0, 2.5)
-    min_credit: float = 0.25
+    # Spread construction: long leg this many dollars below the short leg, first width in this
+    # order whose max loss fits the risk budget of one trade.
+    spread_widths: tuple[float, ...] = (5.0, 2.5, 2.0, 1.0)
+    min_credit: float = 0.15
 
-    # Risk.
+    # Risk, as shares of the capital. Three measures are kept apart:
+    # - collateral: cash the broker holds (spread max loss, CSP strike x 100);
+    # - contractual max loss: the most the contract can lose (stock to 0 for a short put);
+    # - stress loss: the loss if the underlying gaps down by the stress move.
+    # A trade's risk is its max loss for a spread, its stress loss for a short put.
+    max_trade_risk_pct: float = 0.01
+    # Exceptional deals (score at least `exceptional_min_score`) may use this larger budget.
+    use_exceptional_risk: bool = False
+    exceptional_trade_risk_pct: float = 0.02
+    exceptional_min_score: float = 0.85
+    # Sum of the contractual max loss of open, pending and new positions.
+    max_open_risk_pct: float = 0.10
+    # Sum of the risk of positions in one correlated cluster (index ETFs, a sector).
+    max_cluster_risk_pct: float = 0.05
+    stress_move_etf: float = 0.15
+    stress_move_stock: float = 0.30
+    # Collateral caps (cash usage), per trade and in total.
     max_trade_pct: float = 0.10
     max_engaged_pct: float = 0.50
     max_deals: int = 5
+    # Positions per sector, open and pending ones included.
     use_sector_limit: bool = True
     max_per_sector: int = 2
-    # False: the limit counts the day's new deals only; True: open positions count too.
-    sector_limit_includes_open: bool = False
     # Days without a new entry on an underlying after its position closed (0 = same day).
     reentry_cooldown_days: int = 0
+
+    # Safety: no new entry while one of these fails (losses measured on the account value).
+    max_daily_loss_pct: float = 0.02
+    max_monthly_loss_pct: float = 0.04
+    max_drawdown_pct: float = 0.10
+    # Minutes since the last successful position monitor pass and worker run.
+    max_monitor_age_minutes: int = 30
+    max_worker_age_minutes: int = 60
+    # Fresh quotes are fetched on acceptance: a credit this much below the proposal's is stale.
+    max_credit_drift_pct: float = 0.25
 
     # Exits.
     use_take_profit: bool = True
@@ -88,6 +116,12 @@ class StrategyParams:
     score_weight_pop: float = 0.4
     score_weight_aroc: float = 0.4
     score_weight_iv_rank: float = 0.2
+
+    def trade_risk_pct(self, score: float | None = None) -> float:
+        """Risk budget of one trade as a share of capital (the exceptional one if it qualifies)."""
+        if self.use_exceptional_risk and score is not None and score >= self.exceptional_min_score:
+            return max(self.max_trade_risk_pct, self.exceptional_trade_risk_pct)
+        return self.max_trade_risk_pct
 
     def group_of(self, symbol: str) -> str | None:
         """Group of a symbol in an enabled group, None when it is not traded."""
@@ -139,6 +173,12 @@ class StrategyParams:
             out.append("Delta min doit être inférieur ou égal au delta max.")
         if self.max_trade_pct > self.max_engaged_pct:
             out.append("Le maximum par trade dépasse la limite d'engagement totale.")
+        if self.max_trade_risk_pct > self.max_cluster_risk_pct:
+            out.append("Le risque d'un trade dépasse la limite par cluster.")
+        if self.max_cluster_risk_pct > self.max_open_risk_pct:
+            out.append("La limite par cluster dépasse la perte maximale ouverte totale.")
+        if self.use_exceptional_risk and self.exceptional_trade_risk_pct < self.max_trade_risk_pct:
+            out.append("Le seuil exceptionnel doit être au moins égal au risque normal d'un trade.")
         if self.use_time_exit and self.exit_dte >= self.dte_min:
             out.append("La sortie en DTE doit être inférieure au DTE min d'entrée.")
         if not self.universe:
@@ -174,6 +214,7 @@ PARAM_GROUPS = (
     ("indicators", "Indicateurs optionnels"),
     ("structure", "Construction des spreads"),
     ("risk", "Risque et taille"),
+    ("safety", "Garde-fous (blocage des entrées)"),
     ("exits", "Sorties"),
     ("score", "Score de classement"),
 )
@@ -226,20 +267,53 @@ PARAM_SPECS: tuple[ParamSpec, ...] = (
               "floats"),
     ParamSpec("min_credit", "Crédit min d'un spread ($ par action)", "structure", "float",
               minimum=0, maximum=10, step=0.05),
-    ParamSpec("max_trade_pct", "Maximum par trade", "risk", "pct", minimum=0.01, maximum=1,
-              step=0.01),
-    ParamSpec("max_engaged_pct", "Capital engagé max", "risk", "pct", minimum=0.01, maximum=1,
-              step=0.01),
+    ParamSpec("max_trade_risk_pct", "Risque max d'un trade", "risk", "pct",
+              "Perte max d'un spread, perte en stress d'une put vendue. Contrats = arrondi "
+              "inférieur (budget / risque d'un contrat).", minimum=0.001, maximum=0.2, step=0.001),
+    ParamSpec("use_exceptional_risk", "Seuil exceptionnel", "risk", "bool",
+              "Budget plus large pour un deal au score très élevé."),
+    ParamSpec("exceptional_trade_risk_pct", "Risque max d'un deal exceptionnel", "risk", "pct",
+              toggle="use_exceptional_risk", minimum=0.001, maximum=0.2, step=0.001),
+    ParamSpec("exceptional_min_score", "Score min d'un deal exceptionnel", "risk", "float",
+              toggle="use_exceptional_risk", minimum=0, maximum=1, step=0.01),
+    ParamSpec("max_open_risk_pct", "Perte max ouverte totale", "risk", "pct",
+              "Somme des pertes maximales contractuelles des positions ouvertes, en attente et "
+              "du nouveau deal.", minimum=0.005, maximum=1, step=0.005),
+    ParamSpec("max_cluster_risk_pct", "Risque max par cluster corrélé", "risk", "pct",
+              "ETF indiciels ensemble, puis chaque secteur.", minimum=0.005, maximum=1,
+              step=0.005),
+    ParamSpec("stress_move_etf", "Choc de stress ETF", "risk", "pct",
+              "Baisse du sous-jacent utilisée pour la perte en stress.", minimum=0.01,
+              maximum=1, step=0.01),
+    ParamSpec("stress_move_stock", "Choc de stress actions", "risk", "pct", minimum=0.01,
+              maximum=1, step=0.01),
+    ParamSpec("max_trade_pct", "Collatéral max par trade", "risk", "pct", minimum=0.01,
+              maximum=1, step=0.01),
+    ParamSpec("max_engaged_pct", "Collatéral engagé max", "risk", "pct", minimum=0.01,
+              maximum=1, step=0.01),
     ParamSpec("max_deals", "Deals max par jour", "risk", "int", minimum=0, maximum=50),
-    ParamSpec("use_sector_limit", "Limite par secteur", "risk", "bool"),
-    ParamSpec("max_per_sector", "Trades max par secteur", "risk", "int",
+    ParamSpec("use_sector_limit", "Limite par secteur", "risk", "bool",
+              "Positions ouvertes et en attente comprises."),
+    ParamSpec("max_per_sector", "Positions max par secteur", "risk", "int",
               toggle="use_sector_limit", minimum=1, maximum=50),
-    ParamSpec("sector_limit_includes_open", "Compter les positions ouvertes dans la limite",
-              "risk", "bool", "Sinon seuls les deals du jour comptent.",
-              toggle="use_sector_limit"),
     ParamSpec("reentry_cooldown_days", "Délai avant de revenir sur un titre (jours)", "risk",
               "int", "Après la clôture d'une position ; 0 autorise le jour même.",
               minimum=0, maximum=60),
+    ParamSpec("max_daily_loss_pct", "Perte journalière max", "safety", "pct",
+              "Valeur du compte depuis la veille.", minimum=0.001, maximum=1, step=0.001),
+    ParamSpec("max_monthly_loss_pct", "Stop mensuel", "safety", "pct",
+              "Valeur du compte depuis la fin du mois précédent.", minimum=0.001, maximum=1,
+              step=0.001),
+    ParamSpec("max_drawdown_pct", "Drawdown max", "safety", "pct",
+              "Depuis le plus haut du compte. Sert aussi à l'avertissement d'activation d'un "
+              "profil.", minimum=0.01, maximum=1, step=0.01),
+    ParamSpec("max_monitor_age_minutes", "Dernier passage du moniteur (minutes max)", "safety",
+              "int", minimum=5, maximum=1440),
+    ParamSpec("max_worker_age_minutes", "Dernier passage du worker (minutes max)", "safety",
+              "int", minimum=5, maximum=1440),
+    ParamSpec("max_credit_drift_pct", "Baisse max du crédit avant acceptation", "safety", "pct",
+              "Écart entre le crédit proposé et le crédit coté à l'acceptation.", minimum=0.01,
+              maximum=1, step=0.01),
     ParamSpec("use_take_profit", "Objectif de gain", "exits", "bool"),
     ParamSpec("take_profit_pct", "Part du crédit encaissée", "exits", "pct",
               toggle="use_take_profit", minimum=0.05, maximum=1, step=0.05),

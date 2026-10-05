@@ -1,7 +1,8 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
+from typing import Any
 
-from sqlalchemy import Date, String
+from sqlalchemy import JSON, Date, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, Ratio
@@ -18,6 +19,19 @@ class AccountSnapshot(Base):
     collateral_used: Mapped[Decimal]
     buying_power: Mapped[Decimal]
     beta_weighted_delta: Mapped[Decimal | None]
+
+
+class JobHeartbeat(Base):
+    """Last run of each worker job, for the health checks that gate new entries."""
+
+    __tablename__ = "job_heartbeats"
+
+    job: Mapped[str] = mapped_column(String(32), primary_key=True)
+    last_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_failure_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(500))
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
 
 class IvHistory(Base):

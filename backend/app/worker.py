@@ -30,6 +30,7 @@ from app.domain.params import StrategyParams
 from app.marketdata.yahoo import YahooProvider
 from app.models.strategy import ScreenerRun
 from app.services.lab import fail_interrupted, run_queued_backtests
+from app.services.safety import MONITOR, SCREENER, TICK, record_job
 from app.services.screening import active_config, run_screener
 from app.services.trading import monitor
 
@@ -39,25 +40,47 @@ BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 logger = logging.getLogger("worker")
 
 
+def _record_failure(job: str, exc: Exception) -> None:
+    """A job that crashed before recording its own outcome: the entry gate must see it."""
+    try:
+        with SessionLocal() as session:
+            record_job(session, job, ok=False, error=f"{exc.__class__.__name__}: {exc}")
+            session.commit()
+    except Exception:
+        logger.exception("could not record the failure of %s", job)
+
+
 def heartbeat() -> None:
     logger.info("worker alive")
+    with SessionLocal() as session:
+        record_job(session, TICK, ok=True)
+        session.commit()
 
 
 def daily_screener() -> None:
     today = datetime.now(ZoneInfo(MARKET_TZ)).date()
-    with SessionLocal() as session:
-        params = StrategyParams.from_dict(active_config(session).params)
-        provider = YahooProvider(params.dte_min, params.dte_max)
-        run = run_screener(session, provider, today, get_settings().starting_capital)
-        session.commit()
+    try:
+        with SessionLocal() as session:
+            params = StrategyParams.from_dict(active_config(session).params)
+            provider = YahooProvider(params.dte_min, params.dte_max)
+            run = run_screener(session, provider, today, get_settings().starting_capital)
+            session.commit()
+    except Exception as exc:
+        _record_failure(SCREENER, exc)
+        raise
     logger.info("screener run %s: %s", run.id, run.filter_counts)
 
 
 def position_monitor() -> None:
     today = datetime.now(ZoneInfo(MARKET_TZ)).date()
-    broker = AlpacaBroker.from_settings(get_settings())
-    with SessionLocal() as session:
-        monitor(session, broker, today)
+    try:
+        settings = get_settings()
+        broker = AlpacaBroker.from_settings(settings)
+        with SessionLocal() as session:
+            monitor(session, broker, today, settings.starting_capital)
+    except Exception as exc:
+        _record_failure(MONITOR, exc)
+        raise
 
 
 def due_jobs(now: datetime, last_screener_day: date | None) -> list[str]:
@@ -87,6 +110,8 @@ def tick() -> bool:
         if interrupted := fail_interrupted(session):
             logger.warning("%s backtest(s) interrompu(s) marqué(s) en échec", interrupted)
         last = session.execute(select(func.max(ScreenerRun.started_at))).scalar()
+        record_job(session, TICK, ok=True)
+        session.commit()
     last_day = last.astimezone(ZoneInfo(MARKET_TZ)).date() if last else None
     jobs = due_jobs(now, last_day)
     logger.info("tick %s: %s", now.isoformat(timespec="minutes"), jobs or "nothing due")

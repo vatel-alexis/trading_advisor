@@ -123,6 +123,7 @@ def _trade(credit: float, legs, expiration: date, entry: date) -> Trade:
         credit=credit,
         collateral=500 - credit * 100,
         max_loss=500 - credit * 100,
+        stress_loss=500 - credit * 100,
         short_delta=-0.2,
         pop=0.8,
         iv_rank=50.0,
@@ -179,7 +180,8 @@ def test_backtest_in_a_calm_rising_market_takes_profits():
     assert s.trades > 0
     assert not any(t.exit_reason == STOP_LOSS for t in result.trades)
     assert s.final > 20_000
-    assert all(t.quantity * (t.width or 0) * 100 <= 20_000 * 0.1 + 1e-6 for t in result.trades)
+    # Each spread's max loss stays within 1 % of the capital (the default risk budget).
+    assert all(t.max_loss <= 20_000 * 1.2 * 0.01 for t in result.trades)
 
 
 def test_backtest_in_a_crash_stops_out():

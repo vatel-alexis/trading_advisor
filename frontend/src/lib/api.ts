@@ -6,9 +6,37 @@ const AUTH: Record<string, string> = process.env.API_TOKEN ? { "X-API-Token": pr
 
 export type Health = { status: string; database: string; broker_env: string };
 
+export type GateCheck = { key: string; label: string; ok: boolean; detail: string };
+
+export type Status = {
+  environment: string;
+  trading_allowed: boolean;
+  gate: { allowed: boolean; reasons: string[]; checks: GateCheck[] };
+  worker_last_success: string | null;
+  monitor_last_success: string | null;
+  monitor_last_error: string | null;
+  data_last_update: string | null;
+  screener_last_run: string | null;
+  profile: string | null;
+  profile_version: number;
+  broker_env: string;
+};
+
 export type Strategy = "put_credit_spread" | "cash_secured_put" | "covered_call";
 
 export type Dashboard = {
+  cash_available: number;
+  collateral: number;
+  open_max_loss: number;
+  open_max_loss_limit: number;
+  stress_loss: number;
+  clusters: { cluster: string; risk: number }[];
+  cluster_limit: number;
+  equity: number;
+  daily_change: number;
+  monthly_change: number;
+  drawdown: number;
+  limits: { daily_loss: number; monthly_loss: number; drawdown: number; trade_risk: number };
   starting_capital: number;
   realized_pnl: number;
   capital: number;
@@ -79,6 +107,10 @@ export type Opportunity = {
   credit_total: number;
   max_loss: number;
   collateral: number;
+  stress_loss: number | null;
+  risk_pct: number | null;
+  sizing: Sizing | null;
+  cluster: string | null;
   weight: number | null;
   breakeven: number;
   delta: number;
@@ -93,6 +125,16 @@ export type Opportunity = {
   take_profit_gain: number | null;
   stop_price: number | null;
   time_exit_date: string | null;
+};
+
+// Why a deal gets its number of contracts: each cap and the one that binds.
+export type Sizing = {
+  quantity: number;
+  risk_budget: number;
+  risk_per_contract: number;
+  caps: Record<string, number>;
+  binding: string | null;
+  no_trade: string | null;
 };
 
 export type OptionPosition = {
@@ -162,6 +204,7 @@ async function get<T>(path: string): Promise<T | null> {
 }
 
 export const getHealth = () => get<Health>("/health");
+export const getStatus = () => get<Status>("/status");
 export const getDashboard = () => get<Dashboard>("/dashboard");
 export const getOpportunities = () => get<Opportunity[]>("/opportunities");
 export const getPositions = () => get<Positions>("/positions");
@@ -185,6 +228,15 @@ export type ParamField = {
   step: number | null;
 };
 
+export type RiskVerdict = {
+  status: "ok" | "deficit" | "drawdown" | "untested";
+  blocking: boolean;
+  source: string | null;
+  cagr: number | null;
+  max_drawdown: number | null;
+  reasons: string[];
+};
+
 export type Profile = {
   id: number;
   name: string;
@@ -194,6 +246,7 @@ export type Profile = {
   is_active: boolean;
   created_at: string | null;
   updated_at: string;
+  risk: RiskVerdict | null;
 };
 
 export type Profiles = {
