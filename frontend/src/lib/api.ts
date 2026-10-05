@@ -32,6 +32,10 @@ export type Dashboard = {
   stress_loss: number;
   clusters: { cluster: string; risk: number }[];
   cluster_limit: number;
+  expirations: { expiration: string; risk: number }[];
+  expiration_limit: number;
+  // At entry; `missing` positions have none recorded ("donnée absente").
+  greeks: { delta: number; vega: number; theta: number; missing: number; basis: string };
   equity: number;
   daily_change: number;
   monthly_change: number;
@@ -129,6 +133,45 @@ export type Opportunity = {
   holding_window: number | null;
   distance_pct: number | null;
   distance_sd: number | null;
+  quality: Quality | null;
+  return_on_risk: number | null;
+  greeks: { delta: number; vega: number; theta: number } | null;
+  max_gain: number;
+  impact?: Impact;
+};
+
+// Scores kept apart: the final one is the lowest of absolute, execution and portfolio.
+export type Quality = {
+  eligible: boolean;
+  absolute: number;
+  execution: number;
+  portfolio: number | null;
+  final: number | null;
+  weighted: number | null;
+  components: Record<string, number | null>;
+  missing: string[];
+  weaknesses: string[];
+  blocking: string[];
+  rank: number | null;
+  rank_of: number | null;
+};
+
+// The book once the deal is added, next to each limit.
+export type Impact = {
+  open_max_loss_after: number;
+  open_max_loss_limit: number;
+  cluster: string;
+  cluster_risk_after: number;
+  cluster_limit: number;
+  expiration_risk_after: number;
+  expiration_limit: number;
+  stress_loss_after: number;
+  collateral_after: number;
+};
+
+export type NoTrade = {
+  run_at: string | null;
+  rows: { underlying: string; strategy: Strategy | null; reasons: string[]; quality: Quality | null }[];
 };
 
 // Why a deal gets its number of contracts: each cap and the one that binds.
@@ -211,6 +254,7 @@ export const getHealth = () => get<Health>("/health");
 export const getStatus = () => get<Status>("/status");
 export const getDashboard = () => get<Dashboard>("/dashboard");
 export const getOpportunities = () => get<Opportunity[]>("/opportunities");
+export const getNoTrade = () => get<NoTrade>("/opportunities/no-trade");
 export const getPositions = () => get<Positions>("/positions");
 export const getHistory = (query: URLSearchParams) => get<History>(`/history?${query}`);
 

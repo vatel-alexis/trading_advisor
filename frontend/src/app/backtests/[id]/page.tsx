@@ -35,7 +35,9 @@ const FUNNEL_LABEL: Record<string, string> = {
   spread: "Écart bid/ask",
   earnings: "Résultats",
   structure: "Construction",
-  aroc: "AROC",
+  aroc: "AROC (anciens runs)",
+  holding: "Fenêtre de détention",
+  return: "Rendement sur risque",
   underlyings: "Meilleur contrat par titre",
   selected: "Deals retenus",
 };

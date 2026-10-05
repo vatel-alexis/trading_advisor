@@ -149,7 +149,11 @@ def _record_iv(session: Session, result: ScreenResult, today: date) -> None:
 
 
 def _opportunity(
-    c: Candidate, run: ScreenerRun, config: StrategyConfig, params: StrategyParams
+    c: Candidate,
+    run: ScreenerRun,
+    config: StrategyConfig,
+    params: StrategyParams,
+    today: date,
 ) -> Opportunity:
     """Credit is per share (the order's limit price); max loss and collateral cover the quantity."""
     held = c.strategy == "covered_call" or c.group == TRUE_WHEEL_GROUP
@@ -168,6 +172,10 @@ def _opportunity(
         "abs_delta": round(c.abs_delta, 4),
         "cluster": cluster_of(c.underlying, c.sector, params),
         "sizing": c.sizing.to_dict() if c.sizing else None,
+        "quality": c.quality.to_dict() if c.quality else None,
+        "return_on_risk": round(c.return_on_risk, 4),
+        # Per unit at entry; the dashboard multiplies by the quantity.
+        "greeks": c.greeks(today, params.risk_free_rate),
         "iv30": c.iv30,
         "hv30": c.hv30,
         "iv_rank_method": c.iv_rank.method if c.iv_rank else None,
@@ -268,7 +276,7 @@ def run_screener(
         .values(status=OpportunityStatus.EXPIRED)
     )
     for c in [*result.selected, *result.covered_calls]:
-        session.add(_opportunity(c, run, config, params))
+        session.add(_opportunity(c, run, config, params, today))
     _record_iv(session, result, today)
 
     run.universe_size = len(symbols)
@@ -280,6 +288,17 @@ def run_screener(
         "no_trade": {
             symbol: NO_TRADE_MESSAGES.get(code, code) for symbol, code in result.skipped.items()
         },
+        # The same candidates with every blocking rule and their scores.
+        "rejected": [
+            {
+                "underlying": c.underlying,
+                "strategy": c.strategy,
+                "reasons": c.quality.blocking if c.quality else [],
+                "quality": c.quality.to_dict() if c.quality else None,
+            }
+            for c in result.ranked
+            if c.underlying in result.skipped
+        ],
         "errors": errors,
     }
     run.finished_at = datetime.now(UTC)

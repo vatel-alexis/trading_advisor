@@ -13,7 +13,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.domain.params import StrategyParams
-from app.domain.risk import Portfolio
+from app.domain.risk import Exposure, Portfolio, cluster_of, expiration_concentration
 from app.models import (
     Decision,
     Opportunity,
@@ -79,6 +79,37 @@ def _stock_leg(position: Position) -> PositionLeg | None:
 # --- dashboard ------------------------------------------------------------------------------
 
 
+def portfolio_greeks(session: Session) -> dict[str, Any]:
+    """Delta (shares), vega ($ per IV point) and theta ($ per day) of open and pending
+    positions, from the greeks computed when each deal was screened. Positions opened before
+    they were recorded are counted in `missing` ("donnée absente"), never guessed."""
+    total = {"delta": 0.0, "vega": 0.0, "theta": 0.0}
+    missing = 0
+    positions = session.scalars(
+        select(Position).where(Position.status.in_(ACTIVE)).options(selectinload(Position.legs))
+    ).all()
+    for position in positions:
+        stock = _stock_leg(position)
+        if stock is not None:
+            total["delta"] += stock.quantity
+            continue
+        opportunity = (
+            session.get(Opportunity, position.opportunity_id) if position.opportunity_id else None
+        )
+        greeks = ((opportunity.metrics or {}) if opportunity else {}).get("greeks")
+        if not greeks or not position.legs:
+            missing += 1
+            continue
+        quantity = position.legs[0].quantity
+        for key in total:
+            total[key] += float(greeks.get(key, 0.0)) * quantity
+    return {
+        **{k: round(v, 2) for k, v in total.items()},
+        "missing": missing,
+        "basis": "à l'entrée",
+    }
+
+
 def dashboard(
     session: Session, starting_capital: float, today: date | None = None
 ) -> dict[str, Any]:
@@ -122,6 +153,12 @@ def dashboard(
             for key, value in sorted(book.clusters(params).items(), key=lambda kv: -kv[1])
         ],
         "cluster_limit": round(account.capital * params.max_cluster_risk_pct, 2),
+        "expirations": [
+            {"expiration": key, "risk": round(value, 2)}
+            for key, value in expiration_concentration(book.exposures).items()
+        ],
+        "expiration_limit": round(account.capital * params.max_expiration_risk_pct, 2),
+        "greeks": portfolio_greeks(session),
         "equity": round(state.equity, 2),
         "daily_change": round(state.daily, 4),
         "monthly_change": round(state.monthly, 4),
@@ -358,6 +395,39 @@ def _opportunity(o: Opportunity, capital: float) -> dict[str, Any]:
         "holding_window": metrics.get("holding_window"),
         "distance_pct": metrics.get("distance_pct"),
         "distance_sd": metrics.get("distance_sd"),
+        # Quality scores and blocking rules (older deals: None), return not annualized.
+        "quality": metrics.get("quality"),
+        "return_on_risk": metrics.get("return_on_risk"),
+        "greeks": metrics.get("greeks"),
+        "max_gain": round(credit_total, 2),
+    }
+
+
+def _impact(o: Opportunity, book: Portfolio, params: StrategyParams) -> dict[str, Any]:
+    """The book's risk once this deal is added, next to each limit."""
+    strategy = o.strategy_type.value
+    exposure = Exposure(
+        underlying=o.underlying,
+        sector=o.sector,
+        strategy=strategy,
+        max_loss=float(o.max_loss),
+        stress_loss=float(o.stress_loss if o.stress_loss is not None else o.max_loss),
+        collateral=float(o.collateral),
+        expiration=o.expiration,
+    )
+    after = book.with_exposure(exposure)
+    cluster = cluster_of(o.underlying, o.sector, params)
+    capital = book.capital
+    return {
+        "open_max_loss_after": round(after.open_max_loss, 2),
+        "open_max_loss_limit": round(capital * params.max_open_risk_pct, 2),
+        "cluster": cluster,
+        "cluster_risk_after": round(after.cluster_risk(cluster, params), 2),
+        "cluster_limit": round(capital * params.max_cluster_risk_pct, 2),
+        "expiration_risk_after": round(after.expiration_risk(o.expiration), 2),
+        "expiration_limit": round(capital * params.max_expiration_risk_pct, 2),
+        "stress_loss_after": round(after.stress_loss, 2),
+        "collateral_after": round(after.engaged, 2),
     }
 
 
@@ -369,7 +439,35 @@ def opportunities(
     if status is not None:
         query = query.where(Opportunity.status == status)
     query = query.order_by(Opportunity.created_at.desc(), Opportunity.score.desc()).limit(50)
-    return [_opportunity(o, capital) for o in session.scalars(query).all()]
+    params = _params(session)
+    book = Portfolio(capital, tuple(open_exposures(session, params)))
+    out = []
+    for o in session.scalars(query).all():
+        card = _opportunity(o, capital)
+        if o.status == OpportunityStatus.PROPOSED:
+            card["impact"] = _impact(o, book, params)
+        out.append(card)
+    return out
+
+
+def no_trade(session: Session) -> dict[str, Any]:
+    """The last screener run's candidates that got no contract, with every exact reason."""
+    run = session.scalar(
+        select(ScreenerRun)
+        .where(ScreenerRun.finished_at.is_not(None))
+        .order_by(ScreenerRun.finished_at.desc())
+        .limit(1)
+    )
+    if run is None:
+        return {"run_at": None, "rows": []}
+    counts = run.filter_counts or {}
+    rows = counts.get("rejected")
+    if rows is None:  # runs before the quality scores: the single reason only
+        rows = [
+            {"underlying": k, "strategy": None, "reasons": [v], "quality": None}
+            for k, v in (counts.get("no_trade") or {}).items()
+        ]
+    return {"run_at": _iso(run.finished_at), "rows": rows}
 
 
 # --- open positions -------------------------------------------------------------------------

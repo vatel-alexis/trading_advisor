@@ -7,7 +7,6 @@ after an assignment: they need no new capital and do not count toward the daily 
 """
 
 import math
-from bisect import bisect_left
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -15,8 +14,9 @@ from datetime import date
 
 from app.domain.market import IvRank, MarketSnapshot, OptionQuote, atm_iv30, hv30, iv_rank
 from app.domain.params import SHORT_PUT_GROUP, TRUE_WHEEL_GROUP, StrategyParams
-from app.domain.pricing import bs_delta, prob_above, spread_pct
+from app.domain.pricing import bs_delta, bs_theta, bs_vega, prob_above, spread_pct
 from app.domain.risk import (
+    NO_TRADE_MESSAGES,
     AccountState,
     Exposure,
     Portfolio,
@@ -25,7 +25,9 @@ from app.domain.risk import (
     short_put_stress_loss,
     size_deal,
     stress_move,
+    utilization,
 )
+from app.domain.scoring import LegQuote, Quality, assess, finalize, portfolio_fit
 
 PUT_CREDIT_SPREAD = "put_credit_spread"
 # True Wheel put: cash secured, assignment accepted.
@@ -48,7 +50,7 @@ FUNNEL_STAGES = (
     "spread",
     "earnings",
     "structure",
-    "aroc",
+    "return",
     "underlyings",
     "selected",
 )
@@ -89,9 +91,14 @@ class Candidate:
     next_earnings: date | None
     # Days between entry and the planned exit (entry DTE - exit DTE).
     holding_window: int = 0
+    # Final score (the lowest quality score); before the portfolio is known, the lowest of the
+    # absolute and execution scores.
     score: float = 0.0
     quantity: int = 0
     sizing: Sizing | None = None
+    quality: Quality | None = None
+    # Shares' cost basis, for a covered call.
+    cost_basis: float | None = None
 
     @property
     def short_leg(self) -> Leg:
@@ -110,6 +117,27 @@ class Candidate:
         if iv <= 0 or self.dte <= 0 or strike <= 0 or self.spot <= 0:
             return None
         return math.log(self.spot / strike) / (iv * math.sqrt(self.dte / 365))
+
+    @property
+    def return_on_risk(self) -> float:
+        """Not annualized: credit / max loss for a spread, credit / cash held for a put."""
+        if self.strategy == COVERED_CALL:
+            return self.credit / self.cost_basis if self.cost_basis else 0.0
+        base = self.max_loss if self.strategy == PUT_CREDIT_SPREAD else self.collateral
+        return self.credit * 100 / base if base > 0 else 0.0
+
+    def greeks(self, today: date, rate: float) -> dict[str, float]:
+        """Position greeks of one unit (100 shares per contract), seller's side: delta in
+        shares, vega in dollars per IV point, theta in dollars per day."""
+        out = {"delta": 0.0, "vega": 0.0, "theta": 0.0}
+        years = max(0.0, (self.expiration - today).days / 365)
+        for leg in self.legs:
+            q = leg.quote
+            sign = -100 if leg.side == "sell" else 100
+            out["delta"] += sign * leg.delta
+            out["vega"] += sign * bs_vega(self.spot, q.strike, years, q.iv, rate)
+            out["theta"] += sign * bs_theta(q.option_type, self.spot, q.strike, years, q.iv, rate)
+        return {k: round(v, 4) for k, v in out.items()}
 
     @property
     def abs_delta(self) -> float:
@@ -136,6 +164,8 @@ class UnderlyingStats:
     iv30: float | None
     hv30: float | None
     iv_rank: IvRank | None
+    # Close above its trend moving average; None when the history is too short.
+    trend_up: bool | None = None
 
 
 @dataclass
@@ -181,32 +211,38 @@ def _earnings_ok(
     return not today <= next_earnings <= expiration
 
 
-def _percentiles(values: Sequence[float]) -> list[float]:
-    ordered = sorted(values)
-    n = len(ordered)
-    return [bisect_left(ordered, v) / (n - 1) if n > 1 else 1.0 for v in values]
-
-
-def _assign_scores(candidates: Sequence[Candidate], p: StrategyParams) -> None:
-    """Score = weighted PoP percentile, AROC percentile and IV Rank.
-
-    PoP and AROC are ranked within each strategy: a spread's return on its max loss is several
-    times a cash-secured put's return on its strike, so raw values do not compare across the
-    two, and percentiles keep the PoP/AROC trade-off balanced inside the delta band.
-    """
-    by_strategy: dict[str, list[Candidate]] = {}
-    for c in candidates:
-        by_strategy.setdefault(c.strategy, []).append(c)
-    for group in by_strategy.values():
-        pops = _percentiles([c.pop for c in group])
-        arocs = _percentiles([c.aroc for c in group])
-        for c, pop_pct, aroc_pct in zip(group, pops, arocs, strict=True):
-            ivr = c.iv_rank.value / 100 if c.iv_rank else 0.0
-            c.score = (
-                p.score_weight_pop * pop_pct
-                + p.score_weight_aroc * aroc_pct
-                + p.score_weight_iv_rank * ivr
+def _assess(c: Candidate, stats: UnderlyingStats | None, p: StrategyParams) -> None:
+    """Absolute and execution quality of a candidate; its score until the portfolio is known."""
+    c.quality = assess(
+        strategy=c.strategy,
+        spot=c.spot,
+        breakeven=c.breakeven,
+        strike=c.short_leg.quote.strike,
+        dte=c.dte,
+        holding_window=c.holding_window,
+        credit=c.credit,
+        natural_credit=c.natural_credit,
+        max_loss=c.max_loss,
+        collateral=c.collateral,
+        legs=[
+            LegQuote(
+                leg.quote.bid,
+                leg.quote.ask,
+                leg.quote.iv,
+                leg.quote.open_interest,
+                leg.quote.volume,
             )
+            for leg in c.legs
+        ],  # fmt: skip
+        iv_rank=c.iv_rank.value if c.iv_rank else None,
+        iv_rank_method=c.iv_rank.method if c.iv_rank else None,
+        iv_hv=c.iv_hv_ratio,
+        hv=c.hv30,
+        trend_up=stats.trend_up if stats else None,
+        params=p,
+        cost_basis=c.cost_basis,
+    )
+    c.score = c.quality.pre_score
 
 
 def trend_ok(closes: Sequence[float], p: StrategyParams) -> bool:
@@ -337,9 +373,18 @@ def _put_trades(
             )
         )
     funnel["structure"] += len(trades)
-    trades = [t for t in trades if not p.use_aroc_filter or t.aroc >= p.min_aroc]
-    funnel["aroc"] += len(trades)
+    trades = [t for t in trades if _return_ok(t, p)]
+    funnel["return"] += len(trades)
     return trades
+
+
+def _return_ok(t: Candidate, p: StrategyParams) -> bool:
+    if p.use_aroc_filter and t.aroc < p.min_aroc:
+        return False
+    if p.use_ror_filter:
+        floor = p.min_ror_spread if t.strategy == PUT_CREDIT_SPREAD else p.min_ror_put
+        return t.return_on_risk >= floor
+    return True
 
 
 def _build_spread(
@@ -409,10 +454,13 @@ def _covered_call(
                 iv30=stats.iv30,
                 hv30=stats.hv30,
                 next_earnings=snap.next_earnings,
+                holding_window=dte,
                 quantity=lot.shares // 100,
+                cost_basis=lot.cost_basis,
             )
         )
-    _assign_scores(calls, p)
+    for c in calls:
+        _assess(c, stats, p)
     return max(calls, key=lambda c: c.score, default=None)
 
 
@@ -434,7 +482,9 @@ def underlying_stats(
 ) -> UnderlyingStats:
     iv30 = atm_iv30(snap, today)
     rank = iv_rank(iv30, iv_history, snap.closes, p.iv_rank_min_history) if iv30 else None
-    return UnderlyingStats(snap.spot, iv30, hv30(snap.closes), rank)
+    n = p.trend_sma_days
+    trend = snap.closes[-1] > sum(snap.closes[-n:]) / n if len(snap.closes) >= n else None
+    return UnderlyingStats(snap.spot, iv30, hv30(snap.closes), rank, trend)
 
 
 def screen(
@@ -469,7 +519,8 @@ def screen(
             _put_trades(snap, group, stats[snap.symbol], today, params, funnel, account.capital)
         )
 
-    _assign_scores(trades, params)
+    for t in trades:
+        _assess(t, stats.get(t.underlying), params)
     best: dict[str, Candidate] = {}
     for t in trades:
         if t.underlying not in best or t.score > best[t.underlying].score:
@@ -500,6 +551,10 @@ def screen(
         ):
             skipped[c.underlying] = "sector_limit"
             continue
+        if c.quality is not None and c.quality.pre_score < params.min_quality_score:
+            finalize(c.quality, None, params)  # blocking reasons of the trade itself
+            skipped[c.underlying] = "low_quality"
+            continue
         c.sizing = size_deal(
             underlying=c.underlying,
             sector=c.sector,
@@ -510,15 +565,32 @@ def screen(
             portfolio=portfolio,
             params=params,
             score=c.score,
+            expiration=c.expiration,
         )
         if c.sizing.quantity == 0:
             skipped[c.underlying] = c.sizing.no_trade or "risk_budget"
             continue
         c.quantity = c.sizing.quantity
-        portfolio = portfolio.with_exposure(exposure_of(c))
+        exposure = exposure_of(c)
+        after = portfolio.with_exposure(exposure)
+        finalize(c.quality, portfolio_fit(max(utilization(after, exposure, params).values())),
+                 params)  # fmt: skip
+        c.score = c.quality.final or 0.0
+        if not c.quality.eligible:
+            skipped[c.underlying] = "low_quality"
+            c.quantity = 0
+            continue
+        portfolio = after
         held.add(c.underlying)
         selected.append(c)
     funnel["selected"] = len(selected)
+    for i, c in enumerate(ranked, start=1):
+        if c.quality is None:
+            continue
+        c.quality.rank, c.quality.rank_of = i, len(ranked)
+        reason = skipped.get(c.underlying)
+        if reason and reason != "low_quality":
+            c.quality.blocking.append(NO_TRADE_MESSAGES[reason])
 
     by_symbol = {s.symbol: s for s in snapshots}
     covered_calls = []

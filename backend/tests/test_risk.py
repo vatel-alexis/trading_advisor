@@ -124,7 +124,25 @@ def test_check_limits_rejects_what_the_open_book_no_longer_allows() -> None:
     assert set(check_limits(big, book, PARAMS)) == {"cluster_limit"}
 
 
-def test_expiration_concentration_sums_max_loss_by_date() -> None:
+def test_expiration_concentration_sums_risk_by_date() -> None:
     a = replace(spread("SPY"), expiration=TODAY)
     b = replace(spread("QQQ", max_loss=100), expiration=TODAY)
     assert expiration_concentration([a, b]) == {TODAY.isoformat(): 260}
+
+
+def test_positions_on_the_same_expiration_form_a_cluster() -> None:
+    # 5 % of 20 000 = 1 000 $ per expiration date, whatever the sector.
+    book = Portfolio(
+        20_000,
+        (
+            replace(spread("XOM", "Energy", max_loss=450), expiration=TODAY),
+            replace(spread("JPM", "Financial Services", max_loss=450), expiration=TODAY),
+        ),
+    )
+    sizing = size(book, underlying="KO", sector="Consumer Defensive", expiration=TODAY)
+    assert sizing.quantity == 0 and sizing.no_trade == "expiration_limit"
+    later = TODAY.replace(year=TODAY.year + 1)
+    assert size(book, underlying="KO", sector="Consumer Defensive", expiration=later).quantity
+    new = replace(spread("KO", "Consumer Defensive"), expiration=TODAY)
+    assert check_limits(new, book, PARAMS) == ["expiration_limit"]
+    assert NO_TRADE_MESSAGES["expiration_limit"]

@@ -48,3 +48,26 @@ def bs_put_price(spot: float, strike: float, years: float, iv: float, rate: floa
     d1 = _d1(spot, strike, years, iv, rate)
     d2 = d1 - iv * math.sqrt(years)
     return strike * math.exp(-rate * years) * norm_cdf(-d2) - spot * norm_cdf(-d1)
+
+
+def bs_vega(spot: float, strike: float, years: float, iv: float, rate: float) -> float:
+    """Price change per share for a 1 point (0.01) rise in implied volatility, puts and calls."""
+    if years <= 0 or iv <= 0:
+        return 0.0
+    d1 = _d1(spot, strike, years, iv, rate)
+    return spot * math.exp(-(d1**2) / 2) / math.sqrt(2 * math.pi) * math.sqrt(years) / 100
+
+
+def bs_theta(
+    option_type: OptionType, spot: float, strike: float, years: float, iv: float, rate: float
+) -> float:
+    """Price change per share over one calendar day (negative for a long option)."""
+    if years <= 0 or iv <= 0:
+        return 0.0
+    d1 = _d1(spot, strike, years, iv, rate)
+    d2 = d1 - iv * math.sqrt(years)
+    pdf = math.exp(-(d1**2) / 2) / math.sqrt(2 * math.pi)
+    decay = -spot * pdf * iv / (2 * math.sqrt(years))
+    carry = rate * strike * math.exp(-rate * years)
+    annual = decay + carry * norm_cdf(-d2) if option_type == "put" else decay - carry * norm_cdf(d2)
+    return annual / 365

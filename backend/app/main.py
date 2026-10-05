@@ -98,6 +98,11 @@ def get_opportunities(
     return views.opportunities(session, settings.starting_capital, status)
 
 
+@app.get("/opportunities/no-trade")
+def get_no_trade(session: DbSession) -> dict[str, object]:
+    return views.no_trade(session)
+
+
 @app.get("/positions")
 def get_positions(session: DbSession) -> dict[str, object]:
     return views.positions(session, market_today())

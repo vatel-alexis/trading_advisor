@@ -60,6 +60,19 @@ def test_run_stores_deals_and_iv_and_expires_the_previous_proposals(session: Ses
     assert sizing["risk_budget"] == 200 and deal.metrics["cluster"].startswith("Indices US")
     assert deal.metrics["take_profit_price"] == pytest.approx(float(deal.credit) / 2, abs=0.01)
     assert deal.metrics["iv_rank_method"] == "hv_proxy"
+    # Scores kept apart; the stored score is the lowest of the three.
+    quality = deal.metrics["quality"]
+    assert quality["eligible"] and quality["blocking"] == []
+    assert float(deal.score) == pytest.approx(
+        min(quality["absolute"], quality["execution"], quality["portfolio"]), abs=1e-4
+    )
+    assert "historique d'IV (IV Rank estimé par la volatilité réalisée)" in quality["missing"]
+    # A short put spread is long delta and short vega, and earns theta.
+    greeks = deal.metrics["greeks"]
+    assert greeks["delta"] > 0 and greeks["vega"] < 0 and greeks["theta"] > 0
+    assert deal.metrics["return_on_risk"] == pytest.approx(
+        float(deal.credit) * 100 / deal.metrics["max_loss_per_unit"], abs=1e-3
+    )
 
     iv_rows = session.scalars(select(IvHistory).where(IvHistory.day == TODAY)).all()
     assert {row.underlying for row in iv_rows} == {"SPY", "QQQ"}
@@ -106,3 +119,18 @@ def test_assigned_shares_get_a_covered_call_and_no_new_put(session: Session) -> 
     assert deals[0].legs[0].strike >= Decimal("15.5")
     assert run.filter_counts["covered_calls"] == 1
     assert run.filter_counts["skipped"] == {"SOFI": "already_open"}
+
+
+def test_no_trade_lists_every_exact_reason(session: Session) -> None:
+    from app.services import views
+
+    snaps = [make_snapshot(s, p, 1, sector=None) for s, p in (("SPY", 500), ("QQQ", 400))]
+    provider = FakeProvider(*snaps, make_snapshot("IWM", 200, 1, sector=None))
+    run_screener(session, provider, TODAY, starting_capital=20_000)
+
+    listing = views.no_trade(session)
+    [row] = listing["rows"]
+    # Two ETFs at most: the third in rank gets no contract.
+    assert row["strategy"] == "put_credit_spread"
+    assert row["reasons"] == ["Le nombre maximal de positions du secteur est atteint"]
+    assert row["quality"]["rank"] == 3 and listing["run_at"]
