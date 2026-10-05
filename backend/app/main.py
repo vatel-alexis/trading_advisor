@@ -104,7 +104,9 @@ def get_positions(session: DbSession) -> dict[str, object]:
 
 
 HistoryKind = Literal["closed", "expired", "assigned", "canceled", "rejected", "ignored"]
-HistoryStrategy = Literal["put_credit_spread", "cash_secured_put", "covered_call", "shares"]
+HistoryStrategy = Literal[
+    "put_credit_spread", "short_put", "cash_secured_put", "covered_call", "shares"
+]
 
 
 @app.get("/history")

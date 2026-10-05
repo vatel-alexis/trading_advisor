@@ -17,9 +17,12 @@ TIME_EXIT = "time_exit"
 
 @dataclass(frozen=True)
 class ShortPremium:
-    strategy: str  # put_credit_spread | cash_secured_put | covered_call
+    strategy: str  # put_credit_spread | short_put | cash_secured_put | covered_call
     credit: float  # net credit received per share at entry
     expiration: date
+    # True Wheel put: assignment is part of the plan, so neither the stop nor the time exit
+    # buys it back (the profit target still does).
+    assignment_accepted: bool = False
 
 
 @dataclass(frozen=True)
@@ -45,17 +48,19 @@ def evaluate_exit(
     """Return the exit to execute now, if any, given the current cost to close (mid).
 
     Covered calls have no stop: the shares cover the call, and being called away is part of
-    the wheel. The stop is checked first so a losing position at 21 DTE is tagged as a stop.
+    the wheel. A True Wheel put has neither stop nor time exit: it may be assigned. The stop
+    is checked first so a losing position at 21 DTE is tagged as a stop.
     A rule switched off in the parameters never fires.
     """
-    if (
-        params.use_stop_loss
-        and position.strategy != "covered_call"
-        and mark >= stop_price(position.credit, params)
-    ):
+    held = position.strategy == "covered_call" or position.assignment_accepted
+    if params.use_stop_loss and not held and mark >= stop_price(position.credit, params):
         return ExitSignal(STOP_LOSS, mark)
     if params.use_take_profit and mark <= take_profit_price(position.credit, params):
         return ExitSignal(PROFIT_TARGET, mark)
-    if params.use_time_exit and (position.expiration - today).days <= params.exit_dte:
+    if (
+        params.use_time_exit
+        and not position.assignment_accepted
+        and (position.expiration - today).days <= params.exit_dte
+    ):
         return ExitSignal(TIME_EXIT, mark)
     return None

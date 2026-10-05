@@ -53,7 +53,8 @@ def test_parse_params_types_and_cleans_form_values() -> None:
     [
         ({"dte_min": 2.5}, "DTE min à l'entrée : valeur invalide"),
         ({"use_stop_loss": "oui"}, r"Stop \(hors covered calls\) : valeur invalide"),
-        ({"dte_min": 60}, "DTE min doit être inférieur"),
+        ({"dte_min": 70}, "DTE min doit être inférieur"),
+        ({"dte_max": 35}, "détention"),
         ({"min_iv_rank": 150}, "maximum 100"),
         ({"enable_etfs": False, "enable_large_caps": False, "enable_wheel": False}, "Aucun titre"),
         ({"etfs": "SPY, $$"}, "Liste des ETF : valeur invalide"),

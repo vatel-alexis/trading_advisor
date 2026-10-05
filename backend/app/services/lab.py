@@ -43,17 +43,26 @@ PROGRESS_SECONDS = 2.0
 PRESETS: tuple[tuple[str, str, dict[str, Any]], ...] = (
     (
         "Prudent",
-        "Profil par défaut : ETF + wheel, entrée à 40-55 DTE, delta 0.10-0.20, risque de 1 % du "
-        "capital par trade, 10 % de perte maximale ouverte, 5 % par cluster, stop mensuel 4 %.",
+        "Profil par défaut : ETF en put credit spreads et Short Put Income, entrée à 45-65 DTE "
+        "(21 jours de détention au moins), delta 0.10-0.20, risque de 1 % du capital par trade, "
+        "10 % de perte maximale ouverte, 5 % par cluster, stop mensuel 4 %.",
         {},
     ),
     (
         "Actuel",
         "Anciens réglages par défaut, déficitaires au backtest 2019-2026 (-19,1 %/an, drawdown "
         "86,9 %). Déconseillé : son activation demande une confirmation.",
-        {"enable_large_caps": True, "dte_min": 25, "dte_max": 55, "delta_min": 0.15,
-         "delta_max": 0.30, "spread_widths": [5.0, 10.0, 2.5], "min_credit": 0.25,
-         "max_trade_risk_pct": 0.10, "max_open_risk_pct": 0.50, "max_cluster_risk_pct": 0.50},
+        {"enable_large_caps": True, "dte_min": 25, "dte_max": 55, "min_holding_days": 0,
+         "delta_min": 0.15, "delta_max": 0.30, "use_wheel_max_strike": True,
+         "spread_widths": [5.0, 10.0, 2.5], "min_credit": 0.25, "max_trade_risk_pct": 0.10,
+         "max_open_risk_pct": 0.50, "max_cluster_risk_pct": 0.50},
+    ),
+    (
+        "Expérimental : grandes valeurs",
+        "Mode expérimental, hors profils standards : put credit spreads sur les grandes valeurs "
+        "seules. Déficitaire au backtest 2019-2026 (-11,8 %/an à 40-55 DTE).",
+        {"enable_etfs": False, "enable_wheel": False, "enable_true_wheel": False,
+         "enable_large_caps": True},
     ),
 )  # fmt: skip
 # Documented backtests of the presets, until a run of the profile exists.
@@ -65,7 +74,16 @@ PRESET_REFERENCES: dict[str, dict[str, Any]] = {
         "start": "2019-01-02",
         "end": "2026-10-02",
         "source": "Backtest 2019-2026 des anciens réglages par défaut (docs/backtest-resultats.md)",
-    }
+    },
+    "Expérimental : grandes valeurs": {
+        "cagr": -0.118,
+        "max_drawdown": 0.784,
+        "profit_factor": 0.73,
+        "start": "2019-01-02",
+        "end": "2026-10-02",
+        "source": "Backtest 2019-2026, grandes valeurs seules à 40-55 DTE "
+        "(docs/backtest-resultats.md)",
+    },
 }
 
 # Reconstruction assumptions that can be changed per run, with their labels.

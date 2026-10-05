@@ -22,7 +22,7 @@ export type Status = {
   broker_env: string;
 };
 
-export type Strategy = "put_credit_spread" | "cash_secured_put" | "covered_call";
+export type Strategy = "put_credit_spread" | "short_put" | "cash_secured_put" | "covered_call";
 
 export type Dashboard = {
   cash_available: number;
@@ -125,6 +125,10 @@ export type Opportunity = {
   take_profit_gain: number | null;
   stop_price: number | null;
   time_exit_date: string | null;
+  assignment_accepted: boolean;
+  holding_window: number | null;
+  distance_pct: number | null;
+  distance_sd: number | null;
 };
 
 // Why a deal gets its number of contracts: each cap and the one that binds.

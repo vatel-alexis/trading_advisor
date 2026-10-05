@@ -435,3 +435,42 @@ def test_the_wheel_from_put_assignment_to_shares_called_away(session: Session) -
     assert lot.status == PositionStatus.CLOSED and lot.exit_reason == ExitReason.CALLED_AWAY
     assert lot.realized_pnl == Decimal("140")  # (16 - 14.60) x 100
     assert stock.quantity == 0 and lot.collateral == Decimal("0")
+
+
+@pytest.mark.parametrize(
+    ("strategy", "true_wheel", "stopped"),
+    [
+        (StrategyType.SHORT_PUT, [], True),  # Short Put Income: bought back
+        (StrategyType.CASH_SECURED_PUT, ["SOFI"], False),  # True Wheel: may be assigned
+    ],
+)
+def test_only_a_true_wheel_put_waits_for_assignment(
+    session: Session, strategy: StrategyType, true_wheel: list, stopped: bool
+) -> None:
+    config = active_config(session)
+    config.params = {**config.params, "true_wheel": true_wheel}
+    session.flush()
+    broker = FakeBroker()
+    put = make_opportunity(
+        session,
+        strategy,
+        "SOFI",
+        [(SOFI_PUT, OptionType.PUT, Side.SELL, 15, 0.38, 0.42)],
+        0.40,
+        1,
+        1500,
+        stress_loss=410,
+    )
+    position = accept(session, broker, put.id, "click-0001")
+    broker.fill(broker.last()[0], {SOFI_PUT: 0.40})
+    sync_orders(session, broker)
+    broker.quotes = {SOFI_PUT: Quote(1.50, 1.60)}  # four times the credit
+
+    check_exits(session, broker, TODAY + timedelta(days=5))
+
+    assert bool(orders(session, position, OrderPurpose.STOP_LOSS)) == stopped
+    broker.activities = [Activity("a1", ASSIGNMENT, SOFI_PUT, 1, TODAY + timedelta(days=10))]
+    if not stopped:
+        sync_activities(session, broker, TODAY + timedelta(days=11))
+        assert position.status == PositionStatus.ASSIGNED
+        assert [lot.shares for lot in share_lots(session)] == [100]

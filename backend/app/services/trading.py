@@ -578,8 +578,16 @@ def check_exits(session: Session, broker: Broker, today: date) -> None:
         )
         params = _params(session, position)
         expiration = _option_legs(position)[0].expiration
+        # A True Wheel put (assignment accepted by the version it was opened with) is never
+        # stopped or exited at 21 DTE; puts opened before the True Wheel existed keep both.
+        accepted = position.strategy_type == StrategyType.CASH_SECURED_PUT and (
+            params.assignment_accepted(position.underlying)
+        )
         signal = evaluate_exit(
-            ShortPremium(position.strategy_type.value, credit, expiration), mark, today, params
+            ShortPremium(position.strategy_type.value, credit, expiration, accepted),
+            mark,
+            today,
+            params,
         )
         if signal is None:
             continue
@@ -730,7 +738,7 @@ def sync_activities(session: Session, broker: Broker, today: date) -> None:
         if activity.kind == EXPIRATION:
             _expired(position, activity)
         elif activity.kind == ASSIGNMENT and leg.side == Side.SELL:
-            if position.strategy_type == StrategyType.CASH_SECURED_PUT:
+            if position.strategy_type in (StrategyType.CASH_SECURED_PUT, StrategyType.SHORT_PUT):
                 _put_assigned(session, position, leg, activity)
             elif position.strategy_type == StrategyType.COVERED_CALL:
                 _call_assigned(session, position, leg, activity)

@@ -167,7 +167,8 @@ def _counts_as_trade(p: Position) -> bool:
     if p.status == PositionStatus.CANCELED or p.realized_pnl is None:
         return False
     return not (
-        p.status == PositionStatus.ASSIGNED and p.strategy_type == StrategyType.CASH_SECURED_PUT
+        p.status == PositionStatus.ASSIGNED
+        and p.strategy_type in (StrategyType.CASH_SECURED_PUT, StrategyType.SHORT_PUT)
     )
 
 
@@ -325,7 +326,7 @@ def _opportunity(o: Opportunity, capital: float) -> dict[str, Any]:
         "risk_pct": round(
             (
                 float(o.stress_loss)
-                if o.strategy_type == StrategyType.CASH_SECURED_PUT and o.stress_loss is not None
+                if o.strategy_type != StrategyType.PUT_CREDIT_SPREAD and o.stress_loss is not None
                 else max_loss
             )
             / capital,
@@ -352,6 +353,11 @@ def _opportunity(o: Opportunity, capital: float) -> dict[str, Any]:
         ),
         "stop_price": metrics.get("stop_price"),
         "time_exit_date": metrics.get("time_exit_date"),
+        "assignment_accepted": bool(metrics.get("assignment_accepted")),
+        # Entry DTE - exit DTE, and how far the sold strike is from spot (older deals: None).
+        "holding_window": metrics.get("holding_window"),
+        "distance_pct": metrics.get("distance_pct"),
+        "distance_sd": metrics.get("distance_sd"),
     }
 
 

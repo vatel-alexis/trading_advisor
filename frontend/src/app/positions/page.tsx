@@ -156,7 +156,7 @@ export default async function Page() {
 
           {data.share_lots.length > 0 ? (
             <div className="space-y-2">
-              <h2 className="font-display text-lg font-bold">Actions détenues (wheel)</h2>
+              <h2 className="font-display text-lg font-bold">Actions détenues (True Wheel)</h2>
               <div className="overflow-x-auto rounded-2xl border border-line bg-surface">
                 <table className="w-full text-sm">
                   <thead className="bg-surface-2 text-left font-mono text-[11px] uppercase tracking-[0.12em] text-muted">

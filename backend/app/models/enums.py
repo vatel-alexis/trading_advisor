@@ -3,7 +3,10 @@ import enum
 
 class StrategyType(enum.StrEnum):
     PUT_CREDIT_SPREAD = "put_credit_spread"
+    # True Wheel put: cash secured, assignment accepted.
     CASH_SECURED_PUT = "cash_secured_put"
+    # Short Put Income: sold for its premium, bought back before expiration.
+    SHORT_PUT = "short_put"
     COVERED_CALL = "covered_call"
 
 

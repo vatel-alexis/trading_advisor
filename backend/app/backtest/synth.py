@@ -101,7 +101,8 @@ def build_series(
     spreads = {
         "etf": cfg.half_spread_etf,
         "large_cap": cfg.half_spread_large_cap,
-        "wheel": cfg.half_spread_wheel,
+        "short_put": cfg.half_spread_wheel,
+        "true_wheel": cfg.half_spread_wheel,
     }
     series: dict[str, SymbolSeries] = {}
     for symbol, h in market.symbols.items():

@@ -67,8 +67,17 @@ export function OpportunityCard({ deal }: { deal: Opportunity }) {
       </header>
 
       <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-[13px] sm:text-sm">
-        <Row label="Delta" value={deal.delta.toFixed(2)} />
-        <Row label="PoP" value={pct(deal.pop)} />
+        <Row label="|Delta| (indicatif)" value={Math.abs(deal.delta).toFixed(2)} />
+        <Row label="PoP estimée" value={pct(deal.pop)} />
+        <Row
+          label="Distance au strike"
+          value={
+            deal.distance_pct == null
+              ? "donnée absente"
+              : `${pct(deal.distance_pct)}${deal.distance_sd == null ? "" : ` · ${deal.distance_sd.toFixed(1)} σ`}`
+          }
+        />
+        <Row label="Détention prévue" value={deal.holding_window == null ? "donnée absente" : `${deal.holding_window} j`} />
         <Row label="Rendement / risque" value={pct(deal.ror)} />
         <Row label="AROC" value={pct(deal.aroc)} />
         <Row label="Crédit" value={`${price(deal.credit)} × ${deal.quantity}`} />
@@ -88,6 +97,8 @@ export function OpportunityCard({ deal }: { deal: Opportunity }) {
         {deal.stop_price != null ? `, stop à ${price(deal.stop_price)}` : ", pas de stop"}
         {deal.time_exit_date ? `, sortie le ${day(deal.time_exit_date)}` : ""}.
         {deal.next_earnings ? ` Résultats le ${day(deal.next_earnings)}.` : ""}
+        {deal.assignment_accepted ? " Assignation acceptée : les actions sont gardées puis couvertes par des calls." : ""}
+        {" "}Delta et PoP sont des estimations du modèle, pas des probabilités de gain garanties.
       </p>
 
       <div className="mt-auto pt-4">
