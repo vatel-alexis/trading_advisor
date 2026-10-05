@@ -74,6 +74,7 @@ def test_an_unfilled_manual_close_puts_the_profit_target_back(session: Session) 
 def test_manual_close_is_refused_when_it_cannot_be_priced(session: Session) -> None:
     broker = FakeBroker()
     position = open_spread(session, broker)
+    broker.quotes = {}  # the entry quotes are gone: nothing to price the buy-back with
 
     with pytest.raises(DecisionError, match="cotation"):
         close_position(session, broker, position.id, "close-0001")
