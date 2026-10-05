@@ -32,8 +32,8 @@ def test_first_use_makes_prudent_the_active_profile(session: Session) -> None:
     data = lab.list_profiles(session)
 
     names = [p["name"] for p in data["profiles"]]
-    assert names == ["Prudent", "Actuel"]
-    prudent, actuel = data["profiles"]
+    assert names == ["Prudent", "Actuel", "Expérimental : grandes valeurs"]
+    prudent, actuel, experimental = data["profiles"]
     assert prudent["is_active"] and data["active_profile_id"] == prudent["id"]
     assert prudent["changed"] == []
     assert not actuel["is_active"]
@@ -43,9 +43,12 @@ def test_first_use_makes_prudent_the_active_profile(session: Session) -> None:
     assert any("déficitaire" in r for r in actuel["risk"]["reasons"])
     assert any("Drawdown" in r for r in actuel["risk"]["reasons"])
     assert prudent["risk"]["status"] == "untested" and not prudent["risk"]["blocking"]
+    # Large caps live in their own experimental profile, flagged by its backtest.
+    assert not prudent["params"]["enable_large_caps"]
+    assert experimental["params"]["enable_large_caps"] and experimental["risk"]["blocking"]
     assert {f["key"] for f in data["fields"]} >= {"use_trend_filter", "max_trade_risk_pct"}
     lab.list_profiles(session)  # idempotent
-    assert len(session.scalars(select(StrategyProfile)).all()) == 2
+    assert len(session.scalars(select(StrategyProfile)).all()) == 3
 
 
 def test_activating_a_loss_making_profile_needs_an_explicit_confirmation(
@@ -199,9 +202,9 @@ def test_api_profiles_and_backtests(session: Session) -> None:
     finally:
         app.dependency_overrides.clear()
 
-    assert len(listing["profiles"]) == 2
+    assert len(listing["profiles"]) == 3
     assert created.status_code == 200, created.text
-    assert created.json()["params"]["dte_min"] == 40  # copied from Prudent
+    assert created.json()["params"]["dte_min"] == 45  # copied from Prudent
     assert created.json()["risk"]["status"] == "untested"
     assert created.json()["params"]["use_trend_filter"] is True
     assert bad.status_code == 422 and "invalide" in bad.json()["detail"]

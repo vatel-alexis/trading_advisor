@@ -127,7 +127,9 @@ def exit_fill(
     close = h.closes[i]
     low = min(h.lows[i], close) if h.lows else close
     high = max(h.highs[i], close) if h.highs else close
-    position = ShortPremium(t.strategy, t.credit, t.expiration)
+    position = ShortPremium(
+        t.strategy, t.credit, t.expiration, assignment_accepted=t.strategy == "cash_secured_put"
+    )
     day = h.dates[i]
 
     worst, spreads = _price(t, s, i, low, model)
@@ -218,7 +220,7 @@ def run_backtest(
                 sector,
                 params.dte_min,
                 params.dte_max,
-                group == "wheel",
+                group in ("short_put", "true_wheel"),
                 lowest_width,
                 model,
             )

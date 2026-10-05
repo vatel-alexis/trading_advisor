@@ -112,6 +112,15 @@ def test_covered_call_has_no_stop() -> None:
     assert signal is None
 
 
+def test_a_true_wheel_put_waits_for_assignment_but_takes_its_profit() -> None:
+    put = ShortPremium("cash_secured_put", 1.00, TODAY + timedelta(days=21), True)
+    assert evaluate_exit(put, 3.00, TODAY, PARAMS) is None  # no stop
+    assert evaluate_exit(put, 0.80, TODAY, PARAMS) is None  # no time exit
+    assert evaluate_exit(put, 0.40, TODAY, PARAMS).reason == PROFIT_TARGET
+    income = _short("short_put", dte=21)
+    assert evaluate_exit(income, 0.80, TODAY, PARAMS).reason == TIME_EXIT
+
+
 # --- params --------------------------------------------------------------------------------
 
 

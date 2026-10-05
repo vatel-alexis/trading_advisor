@@ -63,6 +63,28 @@ Le moniteur enregistre chaque passage (`job_heartbeats`) et la valeur du compte 
 santé du worker et du moniteur, la dernière mise à jour des données et si le trading est
 autorisé ; un clic montre le détail de chaque contrôle.
 
+## Stratégies et fenêtre d'entrée
+
+| Mode | Titres | Sortie | Assignation |
+| --- | --- | --- | --- |
+| Put credit spread ETF | SPY, QQQ, IWM | objectif 50 %, stop, 21 DTE | non |
+| Short Put Income | liste « Short Put Income » | objectif 50 %, stop, 21 DTE | évitée (rachat) |
+| True Wheel | seulement les actions cochées « J'accepte de détenir » | objectif 50 % seulement | acceptée, puis covered calls |
+| Grandes valeurs | profil « Expérimental : grandes valeurs » | comme les spreads | non |
+
+- Un titre présent dans les deux listes va à la True Wheel : le choix de le détenir est explicite.
+- Une position garde les règles de la version de réglages avec laquelle elle a été ouverte : un
+  ancien cash secured put garde donc sa sortie à 21 DTE.
+- Entrée à 45-65 DTE (réglable). Fenêtre de détention = DTE d'entrée - DTE de sortie ; un
+  candidat sous `min_holding_days` (21 j) est écarté (étape « holding » de l'entonnoir).
+- La distance du strike est donnée de trois façons : % du cours, écarts-types (IV et DTE) et
+  |delta|. Delta et PoP sont des estimations du modèle, jamais des probabilités de gain.
+- Le plafond de strike à 20 $ n'est plus un critère de qualité : il est désactivé par défaut
+  (`use_wheel_max_strike`), la taille vient de la stress loss.
+- La migration 0005 ajoute le type `short_put`, passe le profil Prudent à 45-65 DTE (nouvelle
+  version active s'il l'était) et crée le profil expérimental, dont l'activation demande une
+  confirmation (backtest déficitaire).
+
 ## Migrations sur la base hébergée
 
 Les migrations Alembic atteignent Neon par le workflow GitHub Actions `Worker` : chaque passage

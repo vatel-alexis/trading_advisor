@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.domain.exits import stop_price, take_profit_price
 from app.domain.market import MarketSnapshot
-from app.domain.params import StrategyParams
+from app.domain.params import TRUE_WHEEL_GROUP, StrategyParams
 from app.domain.risk import NO_TRADE_MESSAGES, AccountState, cluster_of
 from app.domain.screener import Candidate, ScreenResult, ShareLot, screen
 from app.models import (
@@ -152,6 +152,7 @@ def _opportunity(
     c: Candidate, run: ScreenerRun, config: StrategyConfig, params: StrategyParams
 ) -> Opportunity:
     """Credit is per share (the order's limit price); max loss and collateral cover the quantity."""
+    held = c.strategy == "covered_call" or c.group == TRUE_WHEEL_GROUP
     metrics: dict[str, Any] = {
         "group": c.group,
         "quantity": c.quantity,
@@ -160,6 +161,11 @@ def _opportunity(
         "max_loss_per_unit": round(c.max_loss, 2),
         "collateral_per_unit": round(c.collateral, 2),
         "stress_loss_per_unit": round(c.stress_loss, 2),
+        "holding_window": c.holding_window,
+        "distance_pct": round(c.distance_pct, 4),
+        "assignment_accepted": c.group == TRUE_WHEEL_GROUP,
+        "distance_sd": None if c.distance_sd is None else round(c.distance_sd, 3),
+        "abs_delta": round(c.abs_delta, 4),
         "cluster": cluster_of(c.underlying, c.sector, params),
         "sizing": c.sizing.to_dict() if c.sizing else None,
         "iv30": c.iv30,
@@ -169,14 +175,11 @@ def _opportunity(
         "take_profit_price": (
             take_profit_price(c.credit, params) if params.use_take_profit else None
         ),
-        "stop_price": (
-            stop_price(c.credit, params)
-            if params.use_stop_loss and c.strategy != "covered_call"
-            else None
-        ),
+        "stop_price": (stop_price(c.credit, params) if params.use_stop_loss and not held else None),
+        # A True Wheel put may be assigned: no stop and no time exit.
         "time_exit_date": (
             (c.expiration - timedelta(days=params.exit_dte)).isoformat()
-            if params.use_time_exit
+            if params.use_time_exit and c.group != TRUE_WHEEL_GROUP
             else None
         ),
     }

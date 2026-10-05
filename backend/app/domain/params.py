@@ -14,28 +14,46 @@ LARGE_CAPS = (
     "AAPL", "MSFT", "AMZN", "GOOGL", "META", "NVDA", "AMD", "JPM", "BAC", "XOM",
     "KO", "PFE", "T", "INTC",
 )  # fmt: skip
-# Cash-secured puts need strike <= 20: 10 % of a 20k account is 2 000 of collateral.
+# Short Put Income names: puts sold and bought back before expiration (21 DTE), never meant to
+# be assigned. Their size comes from the stress loss, not from a price cap.
 WHEEL = (
     "F", "SOFI", "AAL", "RIVN", "NCLH", "VALE", "ITUB", "HBAN", "KEY", "PCG",
     "CLF", "AGNC", "LYFT", "SNAP", "NIO", "RIG",
 )  # fmt: skip
 
 
+# Strategy groups (Candidate.group): a strategy each, kept apart in sizing and reports.
+ETF_GROUP = "etf"  # put credit spreads on index ETFs
+LARGE_CAP_GROUP = "large_cap"  # put credit spreads on large caps (experimental)
+SHORT_PUT_GROUP = "short_put"  # Short Put Income: sold puts, exit at 21 DTE
+TRUE_WHEEL_GROUP = "true_wheel"  # puts on stocks the user accepts to own, then covered calls
+
+
 @dataclass(frozen=True)
 class StrategyParams:
-    # Universe: put credit spreads on ETFs and large caps, the wheel on cheap stocks.
+    # Universe. Standard strategies: put credit spreads on index ETFs, and Short Put Income
+    # (`enable_wheel` / `wheel`, the keys kept from when it was called the wheel).
     enable_etfs: bool = True
-    # Large caps lost money in every backtest variant: off by default.
+    # Experimental: large caps lost money in every backtest variant, off in standard profiles.
     enable_large_caps: bool = False
     enable_wheel: bool = True
     etfs: tuple[str, ...] = ETFS
     large_caps: tuple[str, ...] = LARGE_CAPS
     wheel: tuple[str, ...] = WHEEL
+    # True Wheel: assignment accepted, shares kept and covered calls sold. Only on stocks the
+    # user explicitly accepts to own (empty by default).
+    enable_true_wheel: bool = True
+    true_wheel: tuple[str, ...] = ()
+    # Former main criterion of the wheel, now an optional filter: the risk budget sizes puts.
+    use_wheel_max_strike: bool = False
     wheel_max_strike: float = 20.0
 
-    # Contract filters (thresholds validated after the Sprint 0 spike).
-    dte_min: int = 40
-    dte_max: int = 55
+    # Contract filters. Entries far enough from the 21 DTE exit to leave time to the trade.
+    dte_min: int = 45
+    dte_max: int = 65
+    # holding window = entry DTE - exit DTE (the whole DTE when there is no time exit).
+    min_holding_days: int = 21
+    # Indicative band of the sold leg's absolute delta (not a probability of profit).
     delta_min: float = 0.10
     delta_max: float = 0.20
     use_open_interest_filter: bool = True
@@ -124,20 +142,38 @@ class StrategyParams:
         return self.max_trade_risk_pct
 
     def group_of(self, symbol: str) -> str | None:
-        """Group of a symbol in an enabled group, None when it is not traded."""
+        """Group of a symbol in an enabled group, None when it is not traded.
+
+        A stock listed both ways goes to the True Wheel: owning it was accepted explicitly.
+        """
         if self.enable_etfs and symbol in self.etfs:
-            return "etf"
+            return ETF_GROUP
         if self.enable_large_caps and symbol in self.large_caps:
-            return "large_cap"
+            return LARGE_CAP_GROUP
+        if self.enable_true_wheel and symbol in self.true_wheel:
+            return TRUE_WHEEL_GROUP
         if self.enable_wheel and symbol in self.wheel:
-            return "wheel"
+            return SHORT_PUT_GROUP
         return None
+
+    def assignment_accepted(self, symbol: str) -> bool:
+        return self.group_of(symbol) == TRUE_WHEEL_GROUP
+
+    def holding_window(self, dte: int, assignment_accepted: bool = False) -> int:
+        """Days between entry and the planned exit: entry DTE - exit DTE.
+
+        A True Wheel put has no time exit (it may be assigned), so its window is its DTE.
+        """
+        if assignment_accepted or not self.use_time_exit:
+            return dte
+        return dte - self.exit_dte
 
     @property
     def universe(self) -> tuple[str, ...]:
         groups = (
             (self.enable_etfs, self.etfs),
             (self.enable_large_caps, self.large_caps),
+            (self.enable_true_wheel, self.true_wheel),
             (self.enable_wheel, self.wheel),
         )
         return tuple(dict.fromkeys(s for on, symbols in groups if on for s in symbols))
@@ -145,7 +181,7 @@ class StrategyParams:
     @property
     def all_symbols(self) -> tuple[str, ...]:
         """Every listed symbol, enabled group or not (what the backtest history must cover)."""
-        return tuple(dict.fromkeys(self.etfs + self.large_caps + self.wheel))
+        return tuple(dict.fromkeys(self.etfs + self.large_caps + self.true_wheel + self.wheel))
 
     def to_dict(self) -> dict[str, Any]:
         return {k: list(v) if isinstance(v, tuple) else v for k, v in asdict(self).items()}
@@ -181,6 +217,11 @@ class StrategyParams:
             out.append("Le seuil exceptionnel doit être au moins égal au risque normal d'un trade.")
         if self.use_time_exit and self.exit_dte >= self.dte_min:
             out.append("La sortie en DTE doit être inférieure au DTE min d'entrée.")
+        if self.use_time_exit and self.dte_max - self.exit_dte < self.min_holding_days:
+            out.append(
+                "Aucune échéance ne laisse la fenêtre de détention minimale : "
+                "DTE max - sortie à DTE doit atteindre la fenêtre minimale."
+            )
         if not self.universe:
             out.append("Aucun titre à trader : active au moins un groupe non vide.")
         if not self.spread_widths and self.enable_etfs + self.enable_large_caps:
@@ -209,7 +250,8 @@ class ParamSpec:
 
 
 PARAM_GROUPS = (
-    ("universe", "Univers"),
+    ("universe", "Stratégies et univers"),
+    ("experimental", "Mode expérimental"),
     ("filters", "Filtres des contrats"),
     ("indicators", "Indicateurs optionnels"),
     ("structure", "Construction des spreads"),
@@ -220,20 +262,37 @@ PARAM_GROUPS = (
 )
 
 PARAM_SPECS: tuple[ParamSpec, ...] = (
-    ParamSpec("enable_etfs", "ETF (put credit spreads)", "universe", "bool"),
+    ParamSpec("enable_etfs", "ETF : put credit spreads", "universe", "bool"),
     ParamSpec("etfs", "Liste des ETF", "universe", "symbols", toggle="enable_etfs"),
-    ParamSpec("enable_large_caps", "Grandes valeurs (put credit spreads)", "universe", "bool"),
-    ParamSpec("large_caps", "Liste des grandes valeurs", "universe", "symbols",
+    ParamSpec("enable_wheel", "Short Put Income", "universe", "bool",
+              "Puts vendues puis rachetées avant l'échéance (sortie à 21 DTE) : pas une wheel, "
+              "l'assignation n'est pas recherchée."),
+    ParamSpec("wheel", "Titres Short Put Income", "universe", "symbols", toggle="enable_wheel"),
+    ParamSpec("enable_true_wheel", "True Wheel", "universe", "bool",
+              "Assignation acceptée : les actions sont gardées et des covered calls vendus. "
+              "Pas de stop ni de sortie à 21 DTE sur la put."),
+    ParamSpec("true_wheel", "Actions que j'accepte de détenir (True Wheel)", "universe",
+              "symbols", "Vide par défaut : seuls ces titres reçoivent des puts True Wheel.",
+              toggle="enable_true_wheel"),
+    ParamSpec("use_wheel_max_strike", "Filtre de strike max (puts vendues)", "universe", "bool",
+              "Facultatif : la taille vient du budget de risque, pas du prix de l'action."),
+    ParamSpec("wheel_max_strike", "Strike max ($)", "universe", "float",
+              toggle="use_wheel_max_strike", minimum=1, maximum=500, step=1),
+    ParamSpec("enable_large_caps", "Grandes valeurs : put credit spreads (expérimental)",
+              "experimental", "bool",
+              "Déficitaires dans toutes les variantes du backtest 2019-2026. Hors des profils "
+              "standards."),
+    ParamSpec("large_caps", "Liste des grandes valeurs", "experimental", "symbols",
               toggle="enable_large_caps"),
-    ParamSpec("enable_wheel", "Wheel (cash secured puts)", "universe", "bool"),
-    ParamSpec("wheel", "Liste wheel", "universe", "symbols", toggle="enable_wheel"),
-    ParamSpec("wheel_max_strike", "Strike max wheel ($)", "universe", "float",
-              toggle="enable_wheel", minimum=1, maximum=500, step=1),
     ParamSpec("dte_min", "DTE min à l'entrée", "filters", "int", minimum=1, maximum=365),
     ParamSpec("dte_max", "DTE max à l'entrée", "filters", "int", minimum=1, maximum=365),
-    ParamSpec("delta_min", "Delta min de la jambe vendue", "filters", "float",
+    ParamSpec("min_holding_days", "Fenêtre de détention min (jours)", "filters", "int",
+              "DTE d'entrée moins DTE de sortie : rejette les entrées trop proches de la sortie.",
+              minimum=0, maximum=365),
+    ParamSpec("delta_min", "Delta absolu min de la jambe vendue", "filters", "float",
+              "Plage indicative : le delta n'est pas une probabilité de gain.",
               minimum=0.01, maximum=0.9, step=0.01),
-    ParamSpec("delta_max", "Delta max de la jambe vendue", "filters", "float",
+    ParamSpec("delta_max", "Delta absolu max de la jambe vendue", "filters", "float",
               minimum=0.01, maximum=0.9, step=0.01),
     ParamSpec("use_iv_rank_filter", "Filtre IV Rank", "filters", "bool",
               "Volatilité implicite élevée par rapport à son année passée."),

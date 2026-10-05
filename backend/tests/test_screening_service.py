@@ -29,7 +29,10 @@ class FakeProvider:
 
 
 def test_run_stores_deals_and_iv_and_expires_the_previous_proposals(session: Session) -> None:
-    provider = FakeProvider(make_snapshot("SPY", 500, 1), make_snapshot("QQQ", 400, 1))
+    # Expirations still inside the 45-65 DTE window on the next day's run.
+    provider = FakeProvider(
+        make_snapshot("SPY", 500, 1, dtes=(50,)), make_snapshot("QQQ", 400, 1, dtes=(50,))
+    )
 
     first = run_screener(session, provider, TODAY, starting_capital=20_000)
 

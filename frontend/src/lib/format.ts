@@ -46,9 +46,10 @@ export function dateTime(value: string | null | undefined) {
 
 export const STRATEGY_LABEL: Record<Strategy | "shares", string> = {
   put_credit_spread: "Put credit spread",
-  cash_secured_put: "Cash secured put",
+  short_put: "Short Put Income",
+  cash_secured_put: "True Wheel (put)",
   covered_call: "Covered call",
-  shares: "Actions (wheel)",
+  shares: "Actions (True Wheel)",
 };
 
 // Exit reasons of positions and reject reasons of proposals.
@@ -91,6 +92,8 @@ export function paramValue(field: ParamField | undefined, value: ParamValue | un
 
 export const GROUP_LABEL: Record<string, string> = {
   etf: "ETF",
-  large_cap: "Grandes valeurs",
+  large_cap: "Grandes valeurs (expérimental)",
   wheel: "Wheel",
+  short_put: "Short Put Income",
+  true_wheel: "True Wheel",
 };

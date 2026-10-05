@@ -9,6 +9,7 @@ from app.domain.screener import (
     CASH_SECURED_PUT,
     COVERED_CALL,
     PUT_CREDIT_SPREAD,
+    SHORT_PUT,
     ShareLot,
     screen,
 )
@@ -64,14 +65,14 @@ def test_low_iv_rank_rejects_the_underlying() -> None:
     assert result.funnel["iv_rank"] == 0 < result.funnel["contracts"]
 
 
-def test_wheel_name_gets_a_cash_secured_put_sized_on_its_stress_loss() -> None:
+def test_short_put_income_is_sized_on_its_stress_loss() -> None:
     snap = make_snapshot("SOFI", 8, 0.5, iv=0.60, next_earnings=LATE_EARNINGS)
     result = screen([snap], TODAY, PARAMS, ACCOUNT)
 
     deal = result.selected[0]
     strike = deal.legs[0].quote.strike
-    assert deal.strategy == CASH_SECURED_PUT and len(deal.legs) == 1
-    assert strike <= PARAMS.wheel_max_strike
+    # Not called a wheel: the put is bought back, at 21 DTE at the latest.
+    assert deal.strategy == SHORT_PUT and len(deal.legs) == 1
     # Three separate amounts: cash held, stock to zero, a 30 % gap down.
     assert deal.collateral == strike * 100
     assert deal.max_loss == pytest.approx((strike - deal.credit) * 100)
@@ -139,3 +140,48 @@ def test_iv_history_switches_the_rank_method() -> None:
 
     rank = result.underlyings["SPY"].iv_rank
     assert rank is not None and rank.method == "history" and 75 < rank.value < 85
+
+
+def test_true_wheel_only_on_stocks_accepted_for_ownership() -> None:
+    params = replace(PARAMS, true_wheel=("SOFI",))
+    snaps = [
+        make_snapshot(s, 8, 0.5, iv=0.60, next_earnings=LATE_EARNINGS, sector=s)
+        for s in ("SOFI", "PLTR")
+    ]
+    result = screen(snaps, TODAY, replace(params, wheel=("SOFI", "PLTR")), ACCOUNT)
+
+    by_name = {c.underlying: c for c in result.ranked}
+    assert by_name["SOFI"].strategy == CASH_SECURED_PUT and by_name["SOFI"].group == "true_wheel"
+    assert by_name["PLTR"].strategy == SHORT_PUT and by_name["PLTR"].group == "short_put"
+    # No time exit for a put that may be assigned: its window is its whole DTE.
+    assert by_name["SOFI"].holding_window == by_name["SOFI"].dte
+    assert by_name["PLTR"].holding_window == by_name["PLTR"].dte - PARAMS.exit_dte
+
+
+def test_the_price_cap_is_no_longer_a_quality_filter() -> None:
+    snap = make_snapshot("SOFI", 30, 1, iv=0.60, next_earnings=LATE_EARNINGS)
+    params = replace(PARAMS, wheel=("SOFI",), max_trade_risk_pct=0.10, max_trade_pct=0.5)
+    assert screen([snap], TODAY, params, ACCOUNT).ranked
+    capped = replace(params, use_wheel_max_strike=True)
+    assert screen([snap], TODAY, capped, ACCOUNT).ranked == []
+
+
+def test_an_entry_too_close_to_the_exit_is_rejected() -> None:
+    snap = make_snapshot("SPY", 500, 1, sector=None, dtes=(30,))
+    params = replace(PARAMS, dte_min=25, dte_max=40, min_holding_days=21)
+    result = screen([snap], TODAY, params, ACCOUNT)
+    # 30 DTE - 21 DTE exit = 9 days of holding, under the 21-day minimum.
+    assert result.ranked == []
+    assert result.funnel["holding"] == 0 < result.funnel["dte"]
+
+    allowed = screen([snap], TODAY, replace(params, min_holding_days=5), ACCOUNT)
+    assert allowed.ranked and allowed.ranked[0].holding_window == 9
+
+
+def test_strike_distance_is_given_three_ways() -> None:
+    result = screen([make_snapshot("SPY", 500, 1, sector=None)], TODAY, PARAMS, ACCOUNT)
+    deal = result.ranked[0]
+    strike = deal.short_leg.quote.strike
+    assert deal.distance_pct == pytest.approx((500 - strike) / 500)
+    assert deal.distance_sd is not None and 0.5 < deal.distance_sd < 2
+    assert deal.abs_delta == pytest.approx(abs(deal.short_delta))

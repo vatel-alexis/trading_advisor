@@ -1,10 +1,12 @@
 """Daily screener: filters option chains, builds trades, ranks them and picks the day's deals.
 
-New entries are put credit spreads (ETFs and large caps) and cash-secured puts (wheel names,
-strike <= wheel_max_strike). Covered calls are proposed separately for shares already held
+New entries are put credit spreads (index ETFs; large caps in the experimental mode), Short
+Put Income puts (sold, bought back at 21 DTE) and True Wheel puts (assignment accepted, only on
+stocks the user accepts to own). Covered calls are proposed separately for shares already held
 after an assignment: they need no new capital and do not count toward the daily deals.
 """
 
+import math
 from bisect import bisect_left
 from collections import Counter
 from collections.abc import Mapping, Sequence
@@ -12,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from app.domain.market import IvRank, MarketSnapshot, OptionQuote, atm_iv30, hv30, iv_rank
-from app.domain.params import StrategyParams
+from app.domain.params import SHORT_PUT_GROUP, TRUE_WHEEL_GROUP, StrategyParams
 from app.domain.pricing import bs_delta, prob_above, spread_pct
 from app.domain.risk import (
     AccountState,
@@ -26,8 +28,12 @@ from app.domain.risk import (
 )
 
 PUT_CREDIT_SPREAD = "put_credit_spread"
+# True Wheel put: cash secured, assignment accepted.
 CASH_SECURED_PUT = "cash_secured_put"
+# Short Put Income: a put sold for its premium and bought back before expiration.
+SHORT_PUT = "short_put"
 COVERED_CALL = "covered_call"
+SINGLE_PUT_GROUPS = (SHORT_PUT_GROUP, TRUE_WHEEL_GROUP)
 
 FUNNEL_STAGES = (
     "contracts",
@@ -35,6 +41,7 @@ FUNNEL_STAGES = (
     "trend",
     "iv_hv",
     "dte",
+    "holding",
     "delta",
     "open_interest",
     "volume",
@@ -80,6 +87,8 @@ class Candidate:
     iv30: float | None
     hv30: float | None
     next_earnings: date | None
+    # Days between entry and the planned exit (entry DTE - exit DTE).
+    holding_window: int = 0
     score: float = 0.0
     quantity: int = 0
     sizing: Sizing | None = None
@@ -87,6 +96,24 @@ class Candidate:
     @property
     def short_leg(self) -> Leg:
         return next(leg for leg in self.legs if leg.side == "sell")
+
+    @property
+    def distance_pct(self) -> float:
+        """Distance from spot down to the sold strike, as a share of spot."""
+        return (self.spot - self.short_leg.quote.strike) / self.spot if self.spot > 0 else 0.0
+
+    @property
+    def distance_sd(self) -> float | None:
+        """The same distance in standard deviations of the move to expiration (IV and DTE)."""
+        iv = self.short_leg.quote.iv
+        strike = self.short_leg.quote.strike
+        if iv <= 0 or self.dte <= 0 or strike <= 0 or self.spot <= 0:
+            return None
+        return math.log(self.spot / strike) / (iv * math.sqrt(self.dte / 365))
+
+    @property
+    def abs_delta(self) -> float:
+        return abs(self.short_delta)
 
     @property
     def iv_hv_ratio(self) -> float | None:
@@ -210,7 +237,9 @@ def _put_trades(
     """Every put trade passing the filters. Spreads take the first width whose max loss fits
     the risk budget of one trade (else the first usable width, which then gets no contract)."""
     puts = [q for q in snap.options if q.option_type == "put"]
-    if group == "wheel":
+    single = group in SINGLE_PUT_GROUPS
+    accepted = group == TRUE_WHEEL_GROUP
+    if single and p.use_wheel_max_strike:
         puts = [q for q in puts if q.strike <= p.wheel_max_strike]
     funnel["contracts"] += len(puts)
     if p.use_iv_rank_filter and (stats.iv_rank is None or stats.iv_rank.value < p.min_iv_rank):
@@ -225,6 +254,12 @@ def _put_trades(
 
     rows = [q for q in puts if p.dte_min <= (q.expiration - today).days <= p.dte_max]
     funnel["dte"] += len(rows)
+    rows = [
+        q
+        for q in rows
+        if p.holding_window((q.expiration - today).days, accepted) >= p.min_holding_days
+    ]
+    funnel["holding"] += len(rows)
     deltas = {
         q.symbol: bs_delta(
             "put", snap.spot, q.strike, _years(today, q.expiration), q.iv, p.risk_free_rate
@@ -251,7 +286,7 @@ def _put_trades(
         dte = (short.expiration - today).days
         years = _years(today, short.expiration)
         short_leg = Leg(short, "sell", deltas[short.symbol])
-        if group == "wheel":
+        if single:
             credit = short.mid
             if credit <= 0:
                 continue
@@ -260,7 +295,7 @@ def _put_trades(
             max_loss = (short.strike - credit) * 100
             collateral = short.strike * 100
             stress = short_put_stress_loss(snap.spot, short.strike, credit, move)
-            strategy = CASH_SECURED_PUT
+            strategy = CASH_SECURED_PUT if accepted else SHORT_PUT
         else:
             spread = _build_spread(short, by_key, p, unit_budget)
             if spread is None:
@@ -298,6 +333,7 @@ def _put_trades(
                 iv30=stats.iv30,
                 hv30=stats.hv30,
                 next_earnings=snap.next_earnings,
+                holding_window=p.holding_window(dte, accepted),
             )
         )
     funnel["structure"] += len(trades)
@@ -353,7 +389,7 @@ def _covered_call(
         calls.append(
             Candidate(
                 underlying=snap.symbol,
-                group="wheel",
+                group=TRUE_WHEEL_GROUP,
                 sector=snap.sector,
                 strategy=COVERED_CALL,
                 expiration=q.expiration,
