@@ -1,35 +1,39 @@
 name: Worker
 
-# The worker without a server: `tick` runs whatever is due (monitor 08:00-17:55 New York time,
-# screener from 10:30 once a day), then the backtests queued from the site, against the hosted
-# database. Every 5 minutes around the US session on weekdays, every 30 minutes otherwise.
+# The worker without a server. GitHub skips most scheduled runs (a dozen ran in two days out of
+# hundreds planned), so one run of `loop` ticks on its own clock for 5 h 30 (`tick` every 5
+# minutes from 08:00 to 17:55 New York time on weekdays: monitor, then the screener from 10:30;
+# every hour otherwise, for the backtests queued from the site), then starts the next run
+# itself. The schedules below only restart the chain if it ever breaks; a run that is already
+# looping makes them wait in the queue, and the next link replaces them.
 # Needs the repository secrets DATABASE_URL, BROKER_API_KEY and BROKER_API_SECRET; until
 # DATABASE_URL is set, every run stops at the first step. Schedules only run from main.
 on:
   schedule:
-    # UTC, wide enough for both EDT and EST; `tick` checks New York time itself. Off the top of
-    # the hour, when GitHub delays scheduled runs the most.
-    - cron: "3-58/5 12-22 * * 1-5"
-    # Outside the session, only queued backtests have anything to do.
-    - cron: "10,40 0-11,23 * * *"
-    - cron: "10,40 12-22 * * 0,6"
+    - cron: "17 * * * *"
   workflow_dispatch:
     inputs:
       command:
-        description: "check = diagnostic, tick = ce qui est dû maintenant"
+        description: "loop = worker en continu, check = diagnostic, tick = ce qui est dû maintenant"
         type: choice
-        options: [check, tick, screener, monitor]
+        options: [loop, check, tick, screener, monitor]
         default: check
 
 concurrency:
   group: worker
   cancel-in-progress: false
 
+# The next link of the chain is started with the run's own token.
+permissions:
+  actions: write
+  contents: read
+
 jobs:
   run:
     runs-on: ubuntu-latest
-    # A backtest takes a minute or two; the first one also downloads the market history.
-    timeout-minutes: 30
+    # The loop stops starting ticks after 330 minutes; a last screener or backtest fits before
+    # GitHub's 6-hour limit.
+    timeout-minutes: 355
     defaults:
       run:
         working-directory: backend
@@ -63,4 +67,23 @@ jobs:
       - if: steps.configured.outputs.ok == 'true'
         run: alembic upgrade head
       - if: steps.configured.outputs.ok == 'true'
-        run: python -m app.worker ${{ inputs.command || 'tick' }}
+        id: worker
+        run: |
+          date +%s > "$RUNNER_TEMP/started"
+          python -m app.worker ${{ inputs.command || 'loop' }}
+      # Also after a loop that failed late, so a crash never stops the worker for good; not
+      # after a quick failure (no restart every minute on a broken install), nor after a manual
+      # cancel (to stop the worker: Actions → Worker → ⋯ → Disable workflow).
+      - name: Start the next run
+        if: "!cancelled() && steps.configured.outputs.ok == 'true' && (inputs.command || 'loop') == 'loop'"
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME: ${{ steps.worker.outcome }}
+        run: |
+          started=$(cat "$RUNNER_TEMP/started" 2>/dev/null || date +%s)
+          if [ "$OUTCOME" != "success" ] && [ $(( $(date +%s) - started )) -lt 1800 ]; then
+            echo "::warning::Échec rapide : pas de relance, le passage horaire reprendra."
+            exit 0
+          fi
+          gh workflow run worker.yml --repo "$GITHUB_REPOSITORY" --ref main -f command=loop

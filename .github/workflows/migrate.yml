@@ -10,9 +10,9 @@ on:
     paths: ["backend/migrations/**"]
   workflow_dispatch:
 
-# Shared with the worker, so a migration never runs alongside a tick.
+# Not the worker's group: a worker run loops for hours and its queue keeps one run only.
 concurrency:
-  group: worker
+  group: migrations
   cancel-in-progress: false
 
 jobs:
