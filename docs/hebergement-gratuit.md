@@ -18,8 +18,16 @@ fait ce qui est dû à ce moment-là :
   de 10 h 30 a été retardé, il est rattrapé au suivant ;
 - puis les backtests demandés depuis la page Backtests du site.
 
-Il passe toutes les 5 minutes pendant la séance, en semaine, et toutes les 30 minutes le reste
-du temps : hors séance, un backtest lancé depuis le site démarre donc dans la demi-heure.
+GitHub saute la plupart des tâches planifiées (une douzaine de passages en deux jours au lieu
+de plusieurs centaines). Le workflow ne compte donc pas sur elles : chaque exécution lance
+`python -m app.worker loop`, qui passe toutes les 5 minutes de 8 h 00 à 17 h 55 à New York en
+semaine et toutes les heures le reste du temps, pendant 5 h 30, puis démarre elle-même
+l'exécution suivante. Hors séance, un backtest lancé depuis le site démarre donc dans l'heure.
+La tâche planifiée horaire ne sert qu'à relancer la chaîne si elle s'arrête. Pour la démarrer
+tout de suite : *Actions → Worker → Run workflow* avec `loop`.
+
+Une fusion sur `main` n'atteint le worker qu'à l'exécution suivante (5 h 30 au plus) ; pour
+l'appliquer tout de suite, annuler l'exécution en cours puis relancer `loop`.
 
 Le dépôt est public, donc les minutes GitHub Actions sont gratuites et illimitées. La prise de
 profit à 50 % reste un ordre GTC chez Alpaca, actif en permanence.
@@ -100,9 +108,8 @@ des colonnes absentes et le site affiche « API injoignable ». Pour la rejouer 
 
 ## Limites à connaître
 
-- **Retards.** GitHub peut retarder une tâche planifiée de plusieurs minutes, voire en sauter
-  une quand ses serveurs sont chargés. Les stops sont donc vérifiés toutes les 5 à 15 minutes
-  environ, et non à la minute près.
+- **Retards.** Entre deux exécutions de la chaîne, le moniteur s'interrompt une à deux
+  minutes (installation). Les stops sont vérifiés toutes les 5 minutes, et non à la minute près.
 - **60 jours.** GitHub désactive les tâches planifiées d'un dépôt public sans aucune activité
   (commit, PR...) pendant 60 jours. Il prévient par e-mail, et un clic sur *Enable workflow*
   les relance.
@@ -112,4 +119,5 @@ des colonnes absentes et le site affiche « API injoignable ». Pour la rejouer 
   Vercel aussi : la première page après une pause peut mettre quelques secondes.
 - **Backtests longs.** Un seul passage du worker tourne à la fois : pendant un backtest (une à
   deux minutes), le passage suivant du moniteur attend la fin.
-- Pour arrêter le worker : *Actions → Worker → ⋯ → Disable workflow*.
+- Pour arrêter le worker : *Actions → Worker → ⋯ → Disable workflow*, puis annuler
+  l'exécution en cours.

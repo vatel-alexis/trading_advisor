@@ -8,13 +8,16 @@ Jobs are registered here as sprints land: daily screener (~10:30 ET), position m
     python -m app.worker screener   # one screener run now (e.g. stack started after 10:30)
     python -m app.worker monitor    # one monitor pass now
     python -m app.worker tick       # what is due now + queued backtests (hosted cron)
+    python -m app.worker loop       # ticks for a few hours (hosted worker, see worker.yml)
 """
 
 import argparse
 import logging
 import os
 import sys
-from datetime import date, datetime
+import time
+from collections.abc import Callable
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from alembic.config import Config
@@ -25,7 +28,7 @@ from sqlalchemy import func, select, text
 
 from app.broker.alpaca import AlpacaBroker
 from app.config import get_settings
-from app.db import SessionLocal
+from app.db import SessionLocal, engine
 from app.domain.params import StrategyParams
 from app.marketdata.yahoo import YahooProvider
 from app.models.strategy import ScreenerRun
@@ -130,6 +133,44 @@ def tick() -> bool:
     return ok
 
 
+def next_tick_delay(now: datetime) -> float:
+    """Seconds until the next tick: every 5 minutes while the monitor is due, else at the top
+    of the next hour (only queued backtests are left to run, and Neon can sleep in between)."""
+    if now.weekday() < 5 and 8 <= now.hour <= 17:
+        return 300.0
+    top = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    return (top - now).total_seconds()
+
+
+def loop(
+    budget: timedelta,
+    clock: Callable[[], datetime] = lambda: datetime.now(ZoneInfo(MARKET_TZ)),
+    sleep: Callable[[float], None] = time.sleep,
+    run: Callable[[], bool] = tick,
+) -> int:
+    """Tick on the worker's own clock until `budget` is spent; returns the number of ticks.
+
+    GitHub skips most scheduled runs, so the hosted worker cannot count on its cron: one run
+    loops for a few hours, then the workflow starts the next one. A failed tick is recorded by
+    the jobs themselves (the entry gate sees it) and the loop carries on.
+    """
+    start = clock()
+    ticks = 0
+    while True:
+        try:
+            run()
+        except Exception:
+            logger.exception("tick failed")
+        ticks += 1
+        # No idle connection between ticks, so Neon scales to zero.
+        engine.dispose()
+        now = clock()
+        delay = next_tick_delay(now)
+        if now + timedelta(seconds=delay) - start > budget:
+            return ticks
+        sleep(delay)
+
+
 def build_scheduler() -> BlockingScheduler:
     scheduler = BlockingScheduler(timezone=MARKET_TZ)
     # Backtests are CPU-bound: one at a time, in a child process, so the monitor stays on time.
@@ -211,13 +252,20 @@ def check() -> bool:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.worker")
-    parser.add_argument("command", nargs="?", choices=["check", "screener", "monitor", "tick"])
-    command = parser.parse_args(argv).command
+    parser.add_argument(
+        "command", nargs="?", choices=["check", "screener", "monitor", "tick", "loop"]
+    )
+    parser.add_argument("--minutes", type=int, default=330, help="loop: durée en minutes")
+    args = parser.parse_args(argv)
+    command = args.command
     logging.basicConfig(level=logging.INFO)
     if command == "check":
         return 0 if check() else 1
     if command == "tick":
         return 0 if tick() else 1
+    if command == "loop":
+        logger.info("%s tick(s)", loop(timedelta(minutes=args.minutes)))
+        return 0
     if command == "screener":
         daily_screener()
     elif command == "monitor":
