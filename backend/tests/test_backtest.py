@@ -5,9 +5,34 @@ from datetime import date, timedelta
 import pytest
 
 from app.backtest.data import MarketHistory, SymbolHistory, fill_earnings, split_factors
-from app.backtest.engine import Trade, exit_fill, run_backtest
-from app.backtest.report import buy_and_hold, cagr, max_drawdown, summarize
+from app.backtest.engine import (
+    ASSIGNMENT,
+    CALLED_AWAY,
+    SHARES,
+    BacktestResult,
+    ExitContext,
+    Trade,
+    exit_fill,
+    run_backtest,
+)
+from app.backtest.report import (
+    buy_and_hold,
+    cagr,
+    data_quality,
+    max_consecutive_losses,
+    max_drawdown,
+    profit_factor,
+    recovery,
+    robustness,
+    rolling_windows,
+    split_periods,
+    stress_tests,
+    summarize,
+    wheel_summary,
+)
 from app.backtest.synth import (
+    EXECUTION_SCENARIOS,
+    REALISTIC,
     ModelConfig,
     SymbolSeries,
     ex_earnings_hv,
@@ -201,3 +226,221 @@ def test_report_measures():
     assert cagr(100, 121, 730) == pytest.approx(0.1, abs=1e-3)
     final, dd = buy_and_hold([(date(2020, 1, 1), 10.0), (date(2020, 1, 2), 5.0)], 1000)
     assert final == 500 and dd == 0.5
+
+
+# --- headline measures ---------------------------------------------------------------------
+
+
+def test_drawdown_is_measured_in_time_order() -> None:
+    # The 50 trough comes after the 200 peak: 75 %; a fall before the peak does not count.
+    assert max_drawdown([100, 60, 200, 50, 300]) == pytest.approx(0.75)
+    assert max_drawdown([100, 110, 120]) == 0.0
+
+
+def test_profit_factor_and_losing_streak() -> None:
+    pnls = [100, -50, -50, 30, -20, -10, -5, 60]
+    assert profit_factor(pnls) == pytest.approx(190 / 135)
+    assert profit_factor([10, 20]) == math.inf
+    assert max_consecutive_losses(pnls) == 3
+
+
+def test_recovery_time_and_an_unrecovered_end() -> None:
+    d = date(2020, 1, 1)
+    points = [(d, 100.0), (d + timedelta(days=10), 90.0), (d + timedelta(days=40), 101.0)]
+    assert recovery(points) == (40, True)
+    under = [*points, (d + timedelta(days=50), 95.0), (d + timedelta(days=200), 96.0)]
+    assert recovery(under) == (160, False)
+
+
+def _result(values: list[float], start: date = date(2020, 1, 1)) -> BacktestResult:
+    days = [start + timedelta(days=i) for i in range(len(values))]
+    return BacktestResult(StrategyParams(), ModelConfig(), 100.0, [], [
+        (d, v, 0.0) for d, v in zip(days, values, strict=True)
+    ])  # fmt: skip
+
+
+def test_rolling_windows_and_robustness() -> None:
+    rising = _result([100 + i * 0.05 for i in range(800)])
+    windows = rolling_windows(rising)
+    assert len(windows) >= 5 and all(w["return"] > 0 for w in windows)
+    verdict = robustness(split_periods(rising), windows)
+    assert verdict["label"] == "robuste" and verdict["positive_windows"] == 1.0
+
+    falling = _result([100 - i * 0.05 for i in range(800)])
+    assert robustness(split_periods(falling), rolling_windows(falling))["label"] == "fragile"
+
+
+def test_calibration_and_out_of_sample_split() -> None:
+    result = _result([100 + i for i in range(100)])
+    periods = split_periods(result)
+    assert periods["calibration"]["end"] < periods["out_of_sample"]["start"]
+    # The out-of-sample return starts from the value at the split, not the capital.
+    assert periods["out_of_sample"]["net_return"] == pytest.approx(199 / 159 - 1, abs=1e-4)
+
+
+def test_stress_tests_cost_more_than_the_reference() -> None:
+    entry = date(2020, 1, 1)
+    trades = []
+    for k in range(20):
+        t = _trade(1.0, [(95.0, 1), (90.0, -1)], entry + timedelta(days=60), entry)
+        t.entry_spread, t.exit_spread = 0.05, 0.05 if k % 4 == 0 else 0.0
+        t.exit_day = entry + timedelta(days=10 + k)
+        t.exit_reason, t.exit_price = ("stop_loss", 2.1) if k % 4 == 0 else ("profit_target", 0.5)
+        trades.append(t)
+    equity = [(entry + timedelta(days=i), 20_000.0, 0.0) for i in range(40)]
+    risk = [(entry + timedelta(days=i), 2_000.0, 1_500.0) for i in range(40)]
+    result = BacktestResult(StrategyParams(), ModelConfig(), 20_000.0, trades, equity,
+                            open_risk=risk)  # fmt: skip
+    rows = {row["key"]: row for row in stress_tests(result)}
+    base = rows["base"]["net_return"]
+    for key in ("slippage", "spreads", "win_rate_5", "win_rate_10"):
+        assert rows[key]["net_return"] < base, key
+    assert rows["win_rate_10"]["win_rate"] < rows["base"]["win_rate"]
+    # All open positions losing their stress loss at once: 1 500 on 20 000.
+    assert rows["correlated"]["loss_pct"] == pytest.approx(0.075)
+
+
+def test_data_quality_never_claims_historical_quotes() -> None:
+    params = replace(StrategyParams(), use_volume_filter=True, use_open_interest_filter=True)
+    entry = date(2020, 1, 1)
+    trade = _trade(1.0, [(95.0, 1), (90.0, -1)], entry + timedelta(days=60), entry)
+    result = BacktestResult(params, ModelConfig(), 20_000.0, [trade], [(entry, 20_000.0, 0.0)])
+    quality = data_quality(result)
+    assert quality["prices"] == "reconstitués" and quality["level"] == "moyenne"
+    assert any("volume" in f for f in quality["untested_filters"])
+    assert any("open interest" in f for f in quality["untested_filters"])
+    other = replace(trade, underlying="AAPL")
+    assert data_quality(replace(result, trades=[other]))["level"] == "faible"
+
+
+# --- engine: loss limits, stop signals, execution scenarios, the whole wheel ---------------
+
+
+def test_the_delta_signal_stops_on_the_close() -> None:
+    # Close at 96: the 95 put is close to the money; no stop on the cost (low = close).
+    s = _series([100, 96], [100, 96], [100, 100], [100, 96])
+    t = _trade(
+        1.2, [(95.0, 1), (90.0, -1)], s.history.dates[0] + timedelta(days=45), date(2018, 1, 1)
+    )
+    params = replace(StrategyParams(), stop_delta=0.40)
+    assert exit_fill(t, s, 1, params, ModelConfig()) is None  # no monitor view: cost only
+    reason, _ = exit_fill(t, s, 1, params, ModelConfig(), ExitContext())
+    assert reason == STOP_LOSS and t.triggers[0] in ("delta", "breach")
+
+
+def test_execution_scenarios_rank_from_optimistic_to_pessimistic() -> None:
+    m = market(wavy(500))
+    days = m.symbols["SPY"].dates
+    finals = {}
+    for key, (_, overrides) in EXECUTION_SCENARIOS.items():
+        result = run_backtest(
+            m, ETF_ONLY, days[300], days[-1], model=replace(ModelConfig(), **overrides)
+        )
+        finals[key] = result.equity[-1][1]
+    assert finals["optimiste"] >= finals["realiste"] >= finals["pessimiste"]
+    assert ModelConfig().entry_slippage == EXECUTION_SCENARIOS[REALISTIC][1]["entry_slippage"]
+
+
+def test_the_loss_limits_block_new_entries() -> None:
+    closes = wavy(420) + [wavy(420)[-1] * (0.97**k) for k in range(1, 30)] + wavy(60, 250)
+    m = market(closes, vix=0.35)
+    days = m.symbols["SPY"].dates
+    vix = {d: 0.2 if i < 300 else 0.35 for i, d in enumerate(days)}
+    m = MarketHistory(m.symbols, {"^VIX": vix})
+    tight = replace(ETF_ONLY, max_drawdown_pct=0.001, max_monthly_loss_pct=0.001)
+    result = run_backtest(m, tight, days[300], days[-1])
+    assert result.blocked_days > 0
+
+
+def _wheel_market() -> MarketHistory:
+    """A $6 stock that falls 30 % after the first put, stays down, then recovers."""
+    n = 700
+    days = business_days(date(2018, 1, 2), n)
+
+    def price(i: int) -> float:
+        if i < 330:
+            v = 6.0
+        elif i < 350:
+            v = 6.0 * (1 - 0.3 * (i - 330) / 20)
+        elif i < 450:
+            v = 4.2
+        else:
+            v = 4.2 * (1 + 0.6 * min(1, (i - 450) / 40))
+        return v * math.exp(0.02 * math.sin(i * 1.3))
+
+    spy = [300 * math.exp(0.0003 * i + 0.01 * math.sin(i * 1.7)) for i in range(n)]
+    stock = [price(i) for i in range(n)]
+    return MarketHistory(
+        {
+            "SPY": SymbolHistory("SPY", days, spy, [1.0] * n),
+            "SOFI": SymbolHistory("SOFI", days, stock, [1.0] * n, sector="Financials"),
+        },
+        {"^VIX": {d: 0.22 for d in days}},
+    )
+
+
+WHEEL = replace(
+    StrategyParams(),
+    enable_etfs=False,
+    large_caps=(),
+    wheel=(),
+    true_wheel=("SOFI",),
+    use_earnings_filter=False,
+    use_iv_rank_filter=False,
+    use_take_profit=False,
+)
+
+
+def test_the_whole_wheel_is_simulated() -> None:
+    m = _wheel_market()
+    days = m.symbols["SPY"].dates
+    result = run_backtest(m, WHEEL, days[300], days[-1])
+
+    puts = [t for t in result.trades if t.strategy == "cash_secured_put"]
+    lots = [t for t in result.trades if t.strategy == SHARES]
+    calls = [t for t in result.trades if t.strategy == "covered_call"]
+    assert puts[0].exit_reason == ASSIGNMENT and len(lots) == 1
+    assert lots[0].entry_day == puts[0].exit_day and lots[0].quantity == puts[0].quantity
+    assert calls and all(c.entry_day >= lots[0].entry_day for c in calls)
+    # The account value counts puts, calls and the shares marked at the close.
+    total = sum(t.pnl for t in result.trades)
+    assert result.equity[-1][1] == pytest.approx(20_000 + total)
+    wheel = wheel_summary(result)
+    assert wheel["assignments"] == 1 and wheel["complete"]
+    assert wheel["total_pnl"] == pytest.approx(
+        wheel["puts_pnl"] + wheel["calls_pnl"] + wheel["shares_pnl"], abs=0.02
+    )
+
+
+def test_a_covered_call_is_never_sold_without_shares() -> None:
+    m = _wheel_market()
+    days = m.symbols["SPY"].dates
+    result = run_backtest(m, WHEEL, days[300], days[-1])
+    lots = [t for t in result.trades if t.strategy == SHARES]
+    calls = sorted(
+        (t for t in result.trades if t.strategy == "covered_call"), key=lambda t: t.entry_day
+    )
+    for call in calls:
+        held = [
+            lot
+            for lot in lots
+            if lot.entry_day <= call.entry_day
+            and (lot.exit_day is None or lot.exit_day >= (call.exit_day or call.entry_day))
+        ]
+        assert held and call.quantity * 100 <= sum(lot.shares_adj for lot in held)
+    # One call at a time on the lot: never two open together.
+    for a, b in zip(calls, calls[1:], strict=False):
+        assert a.exit_day is not None and a.exit_day <= b.entry_day
+
+
+def test_a_called_away_lot_closes_the_wheel() -> None:
+    # Expiration day, close at 12: a call at 11 takes the shares, a put at 13 gives them.
+    s = _series([10, 12], [10, 12], [10, 12], [10, 12])
+    exp = s.history.dates[1]
+    params = replace(StrategyParams(), use_take_profit=False)
+    call = _trade(0.3, [(11.0, 1)], exp, date(2018, 1, 1))
+    call.strategy, call.option_type, call.collateral = "covered_call", "call", 0.0
+    assert exit_fill(call, s, 1, params, ModelConfig()) == (CALLED_AWAY, 1.0)
+    put = _trade(0.3, [(13.0, 1)], exp, date(2018, 1, 1))
+    put.strategy = "cash_secured_put"
+    assert exit_fill(put, s, 1, params, ModelConfig()) == (ASSIGNMENT, 1.0)

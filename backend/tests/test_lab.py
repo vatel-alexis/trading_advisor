@@ -143,6 +143,14 @@ def test_a_queued_backtest_runs_and_stores_its_results(session: Session) -> None
     assert done.summary["trades"] > 0 and done.summary["benchmark_final"] > 0
     assert done.result["equity"][0]["benchmark"] == 20_000
     assert done.result["model"]["entry_slippage"] == 0.5
+    # Three execution scenarios; this run's own fills replace the realistic ones.
+    scenarios = done.summary["scenarios"]
+    assert set(scenarios) == {"optimiste", "realiste", "pessimiste"}
+    assert scenarios["realiste"]["label"].startswith("Hypothèses de ce backtest")
+    assert done.summary["engine_version"] == 2 and done.summary["wheel_complete"]
+    assert done.summary["data_quality"] == "moyenne"  # SPY only: implied vol from the VIX
+    assert done.result["data_quality"]["prices"] == "reconstitués"
+    assert {row["key"] for row in done.result["stress"]} >= {"slippage", "correlated"}
     assert lab.cache_view(session)["symbols"] == ["SPY"]
 
     # The second run reads the cache.

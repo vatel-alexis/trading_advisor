@@ -26,7 +26,9 @@ from app.models.enums import (
     RejectReason,
     Side,
 )
+from app.services.screening import run_screener
 from app.services.trading import accept_opportunity, monitor, reject_opportunity, sync_orders
+from tests.chains import make_snapshot
 from tests.fake_broker import FakeBroker
 
 
@@ -42,15 +44,54 @@ def expect(condition: bool, message: str) -> None:
     print(f"ok  {message}")
 
 
-def play_cycle() -> tuple[str, str]:
-    """Accept, fill and take profit on the best deal; reject the second one."""
-    broker = FakeBroker()
-    with SessionLocal() as session:
-        deals = session.scalars(
+class SyntheticProvider:
+    """Black-Scholes chains for SPY and QQQ, when the live run has nothing to offer."""
+
+    def __init__(self, today: date) -> None:
+        self.snapshots = {
+            s.symbol: s
+            for s in (
+                make_snapshot("SPY", 500, 1, dtes=(50,), today=today),
+                make_snapshot("QQQ", 400, 1, dtes=(50,), today=today),
+            )
+        }
+
+    def snapshot(self, symbol: str, today: date):
+        if symbol not in self.snapshots:
+            raise LookupError(f"pas de chaîne synthétique pour {symbol}")
+        return self.snapshots[symbol]
+
+
+def proposed(session) -> list[Opportunity]:
+    return list(
+        session.scalars(
             select(Opportunity)
             .where(Opportunity.status == OpportunityStatus.PROPOSED)
             .order_by(Opportunity.score.desc())
         ).all()
+    )
+
+
+def ensure_deals() -> None:
+    """Outside US market hours Yahoo serves chains without usable IV, and the live run
+    proposes nothing. The cycle then runs on synthetic chains so the check does not depend
+    on the time the CI starts; the live run itself was already exercised by the workflow."""
+    with SessionLocal() as session:
+        live = len(proposed(session))
+        if live >= 2:
+            print(f"ok  {live} deals proposés par le screener sur les données Yahoo")
+            return
+        today = datetime.now(ZoneInfo("America/New_York")).date()
+        print(f"--  {live} deal sur les données Yahoo (hors séance ?), chaînes synthétiques")
+        run_screener(session, SyntheticProvider(today), today, get_settings().starting_capital)
+        session.commit()
+
+
+def play_cycle() -> tuple[str, str]:
+    """Accept, fill and take profit on the best deal; reject the second one."""
+    broker = FakeBroker()
+    with SessionLocal() as session:
+        deals = proposed(session)
         expect(len(deals) >= 2, f"le screener a proposé {len(deals)} deals (2 au moins)")
         best, second = deals[0], deals[1]
 
@@ -142,6 +183,7 @@ def check_web(web: str, closed: str, rejected: str) -> None:
 
 def main(api: str, web: str) -> None:
     print(f"Cycle paper simulé le {date.today()} (broker en mémoire, aucun ordre vers Alpaca)")
+    ensure_deals()
     closed, rejected = play_cycle()
     check_api(api, closed, rejected)
     check_web(web, closed, rejected)

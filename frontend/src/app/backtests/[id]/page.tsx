@@ -1,6 +1,16 @@
 import Link from "next/link";
 
 import { AutoRefresh } from "@/components/AutoRefresh";
+import {
+  DataBanner,
+  HeadlineStats,
+  PeriodsSection,
+  ScenariosTable,
+  StressTable,
+  WheelSection,
+  factor,
+  isEngine2,
+} from "@/components/BacktestRobustness";
 import { BreakdownTable } from "@/components/BacktestTables";
 import { EquityLines, SERIES_COLORS } from "@/components/LabCharts";
 import { RunStatus } from "@/components/RunStatus";
@@ -44,6 +54,15 @@ const FUNNEL_LABEL: Record<string, string> = {
 
 const TRADES_SHOWN = 300;
 
+const TRIGGER_LABEL: Record<string, string> = {
+  cost: "coût",
+  delta: "delta",
+  breach: "strike franchi",
+  liquidity: "liquidité",
+  event: "résultats",
+  portfolio: "limite du portefeuille",
+};
+
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const [run, profiles] = await Promise.all([getBacktest(id), getProfiles()]);
@@ -69,7 +88,10 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
       {busy ? <AutoRefresh seconds={3} /> : null}
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <Link href="/backtests" className="text-xs text-accent underline decoration-accent/40 underline-offset-4 opacity-60">
+          <Link
+            href="/backtests"
+            className="text-xs text-accent underline decoration-accent/40 underline-offset-4 opacity-60"
+          >
             Tous les backtests
           </Link>
           <h1 className="font-display text-2xl font-extrabold tracking-tight md:text-3xl">
@@ -97,29 +119,32 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
 
       {s && r ? (
         <>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <Stat
-              label="Rendement annualisé"
-              value={pct(s.cagr)}
-              valueClass={pnlClass(s.cagr)}
-              hint={`SPY acheté et conservé : ${pct(s.benchmark_cagr)}`}
-            />
-            <Stat label="Drawdown max" value={pct(s.max_drawdown)} hint={`SPY : ${pct(s.benchmark_drawdown)}`} />
-            <Stat label="Valeur finale" value={usd(s.final)} hint={`SPY : ${usd(s.benchmark_final)}`} />
-            <Stat label="Sharpe" value={s.sharpe?.toFixed(2) ?? "—"} hint="Journalier, sans taux sans risque" />
-            <Stat label="Trades clôturés" value={String(s.trades)} hint={`${s.open_at_end} ouvert(s) à la fin`} />
-            <Stat
-              label="Gagnants"
-              value={pct(s.win_rate)}
-              hint={`Profit factor ${s.profit_factor?.toFixed(2) ?? "—"}`}
-            />
-            <Stat label="Gain / perte moyens" value={`${usd(s.avg_win)} / ${usd(s.avg_loss)}`} />
-            <Stat
-              label="Durée moyenne"
-              value={`${s.avg_days_held.toFixed(0)} jours`}
-              hint={`Capital engagé moyen ${pct(s.avg_engaged_pct)}, deal ${pct(s.days_with_deal_pct)} des jours`}
-            />
-          </div>
+          <DataBanner s={s} r={r} />
+          {isEngine2(s) ? (
+            <HeadlineStats s={s} />
+          ) : (
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <Stat label="Drawdown max" value={pct(s.max_drawdown)} hint={`SPY : ${pct(s.benchmark_drawdown)}`} />
+              <Stat label="Profit factor" value={factor(s.profit_factor)} />
+              <Stat label="Rendement annualisé" value={pct(s.cagr)} valueClass={pnlClass(s.cagr)} />
+              <Stat label="Trades clôturés" value={String(s.trades)} hint={`Gagnants ${pct(s.win_rate)}`} />
+            </div>
+          )}
+          <details>
+            <summary className="cursor-pointer text-sm font-semibold">Autres indicateurs</summary>
+            <div className="mt-2 grid grid-cols-2 gap-3 md:grid-cols-4">
+              <Stat label="Valeur finale" value={usd(s.final)} hint={`SPY : ${usd(s.benchmark_final)}`} />
+              <Stat label="Sharpe" value={s.sharpe?.toFixed(2) ?? "—"} hint="Journalier, sans taux sans risque" />
+              <Stat label="Gain / perte moyens" value={`${usd(s.avg_win)} / ${usd(s.avg_loss)}`} />
+              <Stat
+                label="Durée moyenne"
+                value={`${s.avg_days_held.toFixed(0)} jours`}
+                hint={`Capital engagé moyen ${pct(s.avg_engaged_pct)}, deal ${pct(s.days_with_deal_pct)} des jours`}
+              />
+            </div>
+          </details>
+
+          {s.scenarios ? <ScenariosTable scenarios={s.scenarios} /> : null}
 
           <div className="rounded-2xl border border-line bg-surface p-4">
             <h2 className="mb-2 text-sm font-semibold">Valeur du compte</h2>
@@ -175,6 +200,14 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
               </div>
             </div>
           </div>
+
+          {r.periods || r.stress ? (
+            <div className="grid gap-4 md:grid-cols-2">
+              {r.periods ? <PeriodsSection r={r} /> : null}
+              {r.stress ? <StressTable rows={r.stress} /> : null}
+            </div>
+          ) : null}
+          {r.wheel ? <WheelSection w={r.wheel} /> : null}
 
           <div className="grid gap-4 md:grid-cols-2">
             <BreakdownTable title="Sortie" rows={r.breakdowns.exit_reason} label={(k) => REASON_LABEL[k] ?? k} />
@@ -242,22 +275,21 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
                   .slice(-TRADES_SHOWN)
                   .reverse()
                   .map((t, i) => (
-                    <tr
-                      key={`${t.entry_day}-${t.underlying}-${i}`}
-                      className="border-t border-line/70"
-                    >
+                    <tr key={`${t.entry_day}-${t.underlying}-${i}`} className="border-t border-line/70">
                       <td className="px-2 py-1 whitespace-nowrap">{day(t.entry_day)}</td>
                       <td className="px-2 py-1">
                         <span className="font-medium">{t.underlying}</span>{" "}
                         <span className="opacity-60">{STRATEGY_LABEL[t.strategy]}</span>
                       </td>
                       <td className="px-2 py-1 font-mono">{t.strikes.map((k) => price(k)).join(" / ")}</td>
-                      <td className="px-2 py-1 whitespace-nowrap">{day(t.expiration)}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{t.expiration ? day(t.expiration) : "—"}</td>
                       <td className="px-2 py-1 text-right tabular-nums">{t.quantity}</td>
                       <td className="px-2 py-1 text-right tabular-nums">{price(t.credit)}</td>
                       <td className="px-2 py-1 whitespace-nowrap">
                         {t.exit_day
-                          ? `${day(t.exit_day)} · ${REASON_LABEL[t.exit_reason ?? ""] ?? t.exit_reason}`
+                          ? `${day(t.exit_day)} · ${REASON_LABEL[t.exit_reason ?? ""] ?? t.exit_reason}${
+                              t.triggers?.length ? ` (${t.triggers.map((k) => TRIGGER_LABEL[k] ?? k).join(", ")})` : ""
+                            }`
                           : "Ouvert"}
                       </td>
                       <td className="px-2 py-1 text-right tabular-nums">{price(t.exit_price)}</td>

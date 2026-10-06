@@ -8,7 +8,7 @@ from Yahoo only for missing symbols or on demand.
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import fields
+from dataclasses import fields, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -17,8 +17,8 @@ from sqlalchemy.orm import Session, defer
 
 from app.backtest.data import HistoryFetcher, MarketHistory
 from app.backtest.engine import CALENDAR_SYMBOL, run_backtest
-from app.backtest.report import payload
-from app.backtest.synth import ModelConfig
+from app.backtest.report import payload, summary_figures
+from app.backtest.synth import EXECUTION_SCENARIOS, REALISTIC, ModelConfig
 from app.domain.params import (
     ETFS,
     PARAM_GROUPS,
@@ -92,6 +92,7 @@ PRESET_REFERENCES: dict[str, dict[str, Any]] = {
 MODEL_SPECS: tuple[tuple[str, str], ...] = (
     ("entry_slippage", "Glissement à l'entrée (part du demi-écart)"),
     ("exit_slippage", "Glissement aux sorties stop et temps (part du demi-écart)"),
+    ("spread_multiplier", "Écarts bid/ask x"),
     ("index_atm_ratio", "IV ATM SPY/QQQ = VIX/VXN x"),
     ("hv_premium_etf", "IV ATM ETF = volatilité réalisée x"),
     ("hv_premium_stock", "IV ATM actions = volatilité réalisée x"),
@@ -636,11 +637,41 @@ def execute_run(
 
         known = {f.name for f in fields(ModelConfig)}
         model = ModelConfig(**{k: v for k, v in run.model.items() if k in known})
-        result = run_backtest(market, params, run.start, end, run.capital, model, progress)
+        # The realistic scenario (or the run's own assumptions) first, with every detail;
+        # then the optimistic and pessimistic fills, kept as summary figures.
+        others = [key for key in EXECUTION_SCENARIOS if key != REALISTIC]
+        share = 1 / (1 + len(others))
+        result = run_backtest(
+            market, params, run.start, end, run.capital, model, lambda x: progress(x * share)
+        )
         if not result.equity:
             raise LabError("Aucun jour de bourse dans la période choisie.")
         spy = market.symbols[CALENDAR_SYMBOL]
         summary, details = payload(result, list(zip(spy.dates, spy.closes, strict=True)))
+        custom = any(k in run.model for k in EXECUTION_SCENARIOS[REALISTIC][1])
+        scenarios = {
+            REALISTIC: {
+                "label": "Hypothèses de ce backtest (glissements modifiés)"
+                if custom
+                else EXECUTION_SCENARIOS[REALISTIC][0],
+                **summary_figures(result),
+            }
+        }
+        for n, key in enumerate(others, start=1):
+            run.step = f"Scénario {key}"
+            session.commit()
+            label, overrides = EXECUTION_SCENARIOS[key]
+            other = run_backtest(
+                market,
+                params,
+                run.start,
+                end,
+                run.capital,
+                replace(model, **overrides),
+                lambda x, n=n: progress((n + x) * share),
+            )
+            scenarios[key] = {"label": label, **summary_figures(other)}
+        summary["scenarios"] = scenarios
         if end < run.end:
             summary["note"] = f"Historique en cache jusqu'au {end:%d/%m/%Y}."
         run.summary, run.result = summary, details

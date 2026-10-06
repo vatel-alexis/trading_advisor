@@ -39,10 +39,11 @@ def make_chain(
     open_interest: int = 1000,
     volume: int = 200,
     spread: float = 0.04,
+    today: date = TODAY,
 ) -> list[OptionQuote]:
     quotes = []
     for dte in dtes:
-        expiration = TODAY + timedelta(days=dte)
+        expiration = today + timedelta(days=dte)
         for option_type in option_types:
             for strike in strikes:
                 mid = bs_price(option_type, spot, strike, dte / 365, iv)

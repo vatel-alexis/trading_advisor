@@ -351,17 +351,92 @@ export type BacktestSummary = {
   benchmark_cagr: number | null;
   benchmark_drawdown: number | null;
   note?: string;
+  // Engine 2 (whole True Wheel, scenarios, robustness); absent on older runs.
+  engine_version?: number;
+  wheel_complete?: boolean;
+  blocked_days?: number;
+  data_quality?: "faible" | "moyenne";
+  scenarios?: Record<string, ScenarioFigures>;
+} & Partial<HeadlineFigures>;
+
+export type Robustness = {
+  label: "robuste" | "moyen" | "fragile" | "insuffisant";
+  positive_windows: number | null;
+  windows: number;
+  out_of_sample_positive: boolean | null;
+};
+
+export type HeadlineFigures = {
+  net_return: number | null;
+  worst_year: { year: number; return: number | null } | null;
+  max_consecutive_losses: number;
+  recovery_days: number;
+  recovered: boolean;
+  robustness: Robustness;
+};
+
+export type ScenarioFigures = HeadlineFigures & {
+  label: string;
+  cagr: number | null;
+  max_drawdown: number | null;
+  profit_factor: number | null;
+  trades: number;
+  win_rate: number | null;
+};
+
+export type PeriodFigures = {
+  start: string;
+  end: string;
+  net_return: number | null;
+  cagr: number | null;
+  max_drawdown: number | null;
+  profit_factor: number | null;
+  trades: number;
+  win_rate: number | null;
+};
+
+export type StressRow = {
+  key: string;
+  label: string;
+  net_return?: number | null;
+  max_drawdown: number | null;
+  profit_factor?: number | null;
+  win_rate?: number | null;
+  loss?: number | null;
+  loss_pct?: number | null;
+  date?: string | null;
+};
+
+export type DataQuality = {
+  level: "faible" | "moyenne";
+  prices: string;
+  iv_from_index: number | null;
+  untested_filters: string[];
+  approximations: string[];
+};
+
+export type WheelFigures = {
+  complete: boolean;
+  puts: number;
+  assignments: number;
+  covered_calls: number;
+  called_away: number;
+  lots_open_at_end: number;
+  puts_pnl: number;
+  calls_pnl: number;
+  shares_pnl: number;
+  total_pnl: number;
 };
 
 export type BreakdownRow = { key: string; trades: number; win_rate: number | null; pnl: number; avg: number };
 
 export type BacktestTrade = {
   underlying: string;
-  strategy: Strategy;
+  strategy: Strategy | "shares";
   group: string;
   sector: string | null;
   entry_day: string;
-  expiration: string;
+  expiration: string | null;
   strikes: number[];
   quantity: number;
   credit: number;
@@ -373,6 +448,7 @@ export type BacktestTrade = {
   exit_price: number | null;
   pnl: number;
   days_held: number;
+  triggers?: string[];
 };
 
 export type EquityPoint = { date: string; equity: number; engaged: number; benchmark: number | null };
@@ -384,6 +460,11 @@ export type BacktestResult = {
   funnel: Record<string, number>;
   model: Record<string, number>;
   trades: BacktestTrade[];
+  periods?: { calibration?: PeriodFigures; out_of_sample?: PeriodFigures };
+  rolling?: { start: string; end: string; return: number | null; max_drawdown: number | null }[];
+  stress?: StressRow[];
+  data_quality?: DataQuality;
+  wheel?: WheelFigures | null;
 };
 
 export type BacktestStatus = "queued" | "running" | "done" | "failed";
