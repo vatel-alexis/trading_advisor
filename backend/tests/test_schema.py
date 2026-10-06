@@ -7,6 +7,7 @@ EXPECTED_TABLES = {
     "market_history_cache",
     "opportunities",
     "opportunity_legs",
+    "pea_reports",
     "orders",
     "position_events",
     "position_legs",

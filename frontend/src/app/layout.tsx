@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 
 import { NavLinks } from "@/components/NavLinks";
+import { PeaAlert } from "@/components/PeaAlert";
 import { StatusBanner } from "@/components/StatusBanner";
 import "./globals.css";
 
@@ -49,6 +50,7 @@ export default function RootLayout({
             <NavLinks />
           </nav>
           <StatusBanner />
+          <PeaAlert />
         </header>
         <main className="mx-auto max-w-6xl px-4 pt-6 pb-[max(3rem,env(safe-area-inset-bottom))] md:pt-10">
           {children}

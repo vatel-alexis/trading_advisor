@@ -7,6 +7,7 @@ Jobs are registered here as sprints land: daily screener (~10:30 ET), position m
     python -m app.worker check      # preflight: database, broker, Yahoo, next runs
     python -m app.worker screener   # one screener run now (e.g. stack started after 10:30)
     python -m app.worker monitor    # one monitor pass now
+    python -m app.worker pea        # recompute the PEA ETF portfolio page now
     python -m app.worker tick       # what is due now + queued backtests (hosted cron)
     python -m app.worker loop       # ticks for a few hours (hosted worker, see worker.yml)
 """
@@ -18,6 +19,7 @@ import sys
 import time
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
+from datetime import time as dt_time
 from zoneinfo import ZoneInfo
 
 from alembic.config import Config
@@ -30,14 +32,19 @@ from app.broker.alpaca import AlpacaBroker
 from app.config import get_settings
 from app.db import SessionLocal, engine
 from app.domain.params import StrategyParams
-from app.marketdata.yahoo import YahooProvider
+from app.marketdata.yahoo import YahooClient, YahooProvider
 from app.models.strategy import ScreenerRun
+from app.services import pea
 from app.services.lab import fail_interrupted, run_queued_backtests
 from app.services.safety import MONITOR, SCREENER, TICK, record_job
 from app.services.screening import active_config, run_screener
 from app.services.trading import monitor
 
 MARKET_TZ = "America/New_York"
+PARIS_TZ = ZoneInfo("Europe/Paris")
+PEA = "pea"
+# Prices of the day are final a little after the 17:35 close.
+PARIS_CLOSE = dt_time(18, 0)
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 logger = logging.getLogger("worker")
@@ -86,6 +93,35 @@ def position_monitor() -> None:
         raise
 
 
+def pea_refresh() -> None:
+    """Recompute the PEA page from Yahoo's daily prices (the ETFs trade in Paris)."""
+    today = datetime.now(PARIS_TZ).date()
+    try:
+        prices, fx = pea.fetch_prices(YahooClient())
+        payload = pea.build_report(prices, fx, today)
+        with SessionLocal() as session:
+            pea.store(session, payload)
+            record_job(session, PEA, ok=True)
+            session.commit()
+    except Exception as exc:
+        _record_failure(PEA, exc)
+        raise
+    logger.info("PEA report as of %s, signal %s", payload["as_of"], payload["signal_day"])
+
+
+def pea_due(now: datetime, last: datetime | None) -> bool:
+    """Right away when no report exists, then once a day after the Euronext close (17:35,
+    Paris time); a report computed earlier the same day, before the close, is redone. Weekends
+    included: the month-end signal is confirmed on the first day of the new month, often a
+    Saturday or Sunday, in time to trade at the next open."""
+    if last is None:
+        return True
+    now, last = now.astimezone(PARIS_TZ), last.astimezone(PARIS_TZ)
+    after_close = now.time() >= PARIS_CLOSE
+    done = last.date() == now.date() and last.time() >= PARIS_CLOSE
+    return after_close and not done
+
+
 def due_jobs(now: datetime, last_screener_day: date | None) -> list[str]:
     """Jobs a stateless cron tick must run at `now` (market time), same hours as the scheduler.
 
@@ -113,15 +149,18 @@ def tick() -> bool:
         if interrupted := fail_interrupted(session):
             logger.warning("%s backtest(s) interrompu(s) marqué(s) en échec", interrupted)
         last = session.execute(select(func.max(ScreenerRun.started_at))).scalar()
+        last_pea = pea.last_computed(session)
         record_job(session, TICK, ok=True)
         session.commit()
     last_day = last.astimezone(ZoneInfo(MARKET_TZ)).date() if last else None
     jobs = due_jobs(now, last_day)
+    if pea_due(now, last_pea):
+        jobs.append(PEA)
     logger.info("tick %s: %s", now.isoformat(timespec="minutes"), jobs or "nothing due")
     ok = True
     for job in jobs:
         try:
-            {"monitor": position_monitor, "screener": daily_screener}[job]()
+            {"monitor": position_monitor, "screener": daily_screener, PEA: pea_refresh}[job]()
         except Exception:
             logger.exception("%s failed", job)
             ok = False
@@ -253,7 +292,7 @@ def check() -> bool:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.worker")
     parser.add_argument(
-        "command", nargs="?", choices=["check", "screener", "monitor", "tick", "loop"]
+        "command", nargs="?", choices=["check", "screener", "monitor", "tick", "loop", "pea"]
     )
     parser.add_argument("--minutes", type=int, default=330, help="loop: durée en minutes")
     args = parser.parse_args(argv)
@@ -270,6 +309,8 @@ def main(argv: list[str]) -> int:
         daily_screener()
     elif command == "monitor":
         position_monitor()
+    elif command == "pea":
+        pea_refresh()
     else:
         with SessionLocal() as session:
             if interrupted := fail_interrupted(session):

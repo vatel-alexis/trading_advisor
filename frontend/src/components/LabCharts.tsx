@@ -19,7 +19,10 @@ export const SERIES_COLORS = [
 export type Line = { label: string; color: string; dashed?: boolean; points: { date: string; value: number }[] };
 
 const time = (iso: string) => new Date(`${iso}T12:00:00`).getTime();
-const axisLabel = new Intl.NumberFormat("fr-FR", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+const axisFormats = {
+  USD: new Intl.NumberFormat("fr-FR", { style: "currency", currency: "USD", maximumFractionDigits: 0 }),
+  EUR: new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }),
+};
 
 function ticks(min: number, max: number, count = 4): number[] {
   const span = max - min || Math.abs(max) || 1;
@@ -32,7 +35,16 @@ function ticks(min: number, max: number, count = 4): number[] {
   return values;
 }
 
-export function EquityLines({ lines, capital }: { lines: Line[]; capital: number }) {
+export function EquityLines({
+  lines,
+  capital,
+  currency = "USD",
+}: {
+  lines: Line[];
+  capital: number;
+  currency?: "USD" | "EUR";
+}) {
+  const axisLabel = axisFormats[currency];
   const all = lines.flatMap((l) => l.points);
   if (all.length < 2) return <p className="flex h-40 items-center justify-center text-sm opacity-60">Pas de courbe.</p>;
   const values = all.map((p) => p.value);
@@ -96,7 +108,7 @@ export function EquityLines({ lines, capital }: { lines: Line[]; capital: number
             strokeLinejoin="round"
           >
             <title>
-              {`${l.label} : ${usd(l.points[l.points.length - 1]?.value)} au ${day(l.points[l.points.length - 1]?.date)}`}
+              {`${l.label} : ${currency === "USD" ? usd(l.points[l.points.length - 1]?.value) : axisLabel.format(l.points[l.points.length - 1]?.value ?? 0)} au ${day(l.points[l.points.length - 1]?.date)}`}
             </title>
           </path>
         ))}

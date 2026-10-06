@@ -19,7 +19,7 @@ from app.db import get_session
 from app.domain.params import StrategyParams
 from app.models import StrategyProfile
 from app.models.enums import OpportunityStatus, RejectReason
-from app.services import lab, safety, views
+from app.services import lab, pea, safety, views
 from app.services.trading import (
     DecisionError,
     accept_opportunity,
@@ -195,6 +195,19 @@ def close(
         "order_status": order.status.value,
         "limit_price": float(order.limit_price) if order.limit_price else None,
     }
+
+
+# --- PEA ETF portfolio ------------------------------------------------------------------------
+
+
+@app.get("/pea")
+def get_pea(session: DbSession) -> dict[str, object]:
+    return pea.view(session)
+
+
+@app.get("/pea/alert")
+def get_pea_alert(session: DbSession) -> dict[str, object]:
+    return pea.alert(session, datetime.now(ZoneInfo("Europe/Paris")).date())
 
 
 # --- settings lab: profiles and backtests ------------------------------------------------------
