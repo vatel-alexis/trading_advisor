@@ -33,6 +33,7 @@ from app.services.trading import (
     accept_opportunity,
     check_exits,
     reject_opportunity,
+    reprice_entries,
     sync_activities,
     sync_orders,
 )
@@ -139,7 +140,11 @@ def open_spread(session: Session, broker: FakeBroker) -> Position:
 
 
 def orders(session: Session, position: Position, purpose: OrderPurpose) -> list[Order]:
-    query = select(Order).where(Order.position_id == position.id, Order.purpose == purpose)
+    query = (
+        select(Order)
+        .where(Order.position_id == position.id, Order.purpose == purpose)
+        .order_by(Order.id)
+    )
     return list(session.scalars(query).all())
 
 
@@ -308,30 +313,137 @@ def test_a_network_failure_is_retried_by_the_next_sync(session: Session) -> None
 # --- automatic exits ------------------------------------------------------------------------
 
 
-def test_the_stop_cancels_the_target_and_buys_back_at_the_natural(session: Session) -> None:
+def test_the_stop_is_confirmed_then_buys_back_with_a_progressive_limit(session: Session) -> None:
     broker = FakeBroker()
     position = open_spread(session, broker)
     target_id, _ = broker.last()
-    # Mid cost to close 3.1 - 0.95 = 2.15, above the 2.10 stop; natural 3.2 - 0.9 = 2.30.
+    # Mid cost to close 3.1 - 0.95 = 2.15 and natural 3.2 - 0.9 = 2.30: the expected buy-back
+    # 2.225 is above the stop at 2 x the 1.05 filled credit.
     broker.quotes = {SHORT: Quote(3.0, 3.2), LONG: Quote(0.9, 1.0)}
+
+    check_exits(session, broker, TODAY + timedelta(days=5))
+    assert not orders(session, position, OrderPurpose.STOP_LOSS)  # one mark is not enough
+    assert broker.orders[target_id].status == "submitted"
 
     check_exits(session, broker, TODAY + timedelta(days=5))
 
     assert broker.orders[target_id].status == "canceled"
     [stop] = orders(session, position, OrderPurpose.STOP_LOSS)
-    stop_id, request = broker.last()
-    assert request.limit_price == 2.3 and request.time_in_force == "day"
-    assert PositionEventType.STOP_TRIGGERED in events(position)
+    _, request = broker.last()
+    # First step: a third of the way from the mid to the natural.
+    assert request.limit_price == 2.2 and request.time_in_force == "day"
+    assert stop.reprice_step == 1
+    triggered = next(e for e in position.events if e.type == PositionEventType.STOP_TRIGGERED)
+    assert triggered.payload["triggers"] == ["cost"] and triggered.payload["natural"] == 2.3
+    assert position.exit_mid == Decimal("2.15") and position.exit_natural == Decimal("2.3")
     assert position.status == PositionStatus.OPEN
 
     check_exits(session, broker, TODAY + timedelta(days=5))
-    assert len(orders(session, position, OrderPurpose.STOP_LOSS)) == 1  # already working
+    assert len(orders(session, position, OrderPurpose.STOP_LOSS)) == 1  # still within its step
 
-    broker.fill(stop_id, {SHORT: 3.2, LONG: 0.9})
+    # Unfilled after the re-pricing interval: canceled and sent one step closer.
+    stop.submitted_at -= timedelta(minutes=PARAMS.exit_reprice_minutes)
+    check_exits(session, broker, TODAY + timedelta(days=5))
+    first, second = orders(session, position, OrderPurpose.STOP_LOSS)
+    assert first.status == OrderStatus.CANCELED and first.replaced
+    second_id, request = broker.last()
+    assert request.limit_price == 2.25 and second.reprice_step == 2
+    assert PositionEventType.ORDER_REPRICED in events(position)
+
+    # Filled at the natural, not at the mid the stop was measured on: the stop does not
+    # guarantee the price, the loss is taken from the fill.
+    broker.fill(second_id, {SHORT: 3.2, LONG: 0.9})
     sync_orders(session, broker)
     assert position.status == PositionStatus.CLOSED
     assert position.exit_reason == ExitReason.STOP_LOSS
+    assert position.exit_debit == Decimal("2.3")
     assert position.realized_pnl == Decimal("-250.00")
+
+
+def test_a_delta_signal_stops_before_the_cost_does(session: Session) -> None:
+    broker = FakeBroker()
+    position = open_spread(session, broker)
+    # Mid 1.55 - 0.75 = 0.80, far from the 2.10 stop, but the short put is at -0.55 delta.
+    broker.quotes = {SHORT: Quote(1.5, 1.6, delta=-0.55), LONG: Quote(0.7, 0.8, delta=-0.45)}
+
+    check_exits(session, broker, TODAY + timedelta(days=5))
+
+    [stop] = orders(session, position, OrderPurpose.STOP_LOSS)
+    triggered = next(e for e in position.events if e.type == PositionEventType.STOP_TRIGGERED)
+    assert triggered.payload["triggers"] == ["delta"]
+    session.flush()
+    query = select(PositionMark).where(PositionMark.position_id == position.id)
+    mark = session.scalars(query).one()
+    assert mark.delta == Decimal("-0.55") and mark.natural == Decimal("0.9")
+
+
+def test_the_underlying_through_the_short_strike_stops(session: Session) -> None:
+    broker = FakeBroker()
+    position = open_spread(session, broker)
+    broker.quotes = {SHORT: Quote(1.5, 1.6), LONG: Quote(0.7, 0.8)}
+    broker.prices = {"SPY": 499.0}
+
+    check_exits(session, broker, TODAY + timedelta(days=5))
+
+    assert orders(session, position, OrderPurpose.STOP_LOSS)
+    triggered = next(e for e in position.events if e.type == PositionEventType.STOP_TRIGGERED)
+    assert triggered.payload["triggers"] == ["breach"]
+
+
+def test_earnings_before_the_expiration_close_the_position(session: Session) -> None:
+    broker = FakeBroker()
+    position = open_spread(session, broker)
+    opportunity = session.get(Opportunity, position.opportunity_id)
+    opportunity.next_earnings = TODAY + timedelta(days=6)
+    broker.quotes = {SHORT: Quote(1.5, 1.6), LONG: Quote(0.7, 0.8)}
+
+    check_exits(session, broker, TODAY + timedelta(days=2))
+    assert not orders(session, position, OrderPurpose.STOP_LOSS)
+
+    check_exits(session, broker, TODAY + timedelta(days=4))
+    assert orders(session, position, OrderPurpose.STOP_LOSS)
+
+
+def test_the_entry_steps_toward_the_natural_credit(session: Session) -> None:
+    broker = FakeBroker()
+    position = accept(session, broker, spread(session).id, "click-0001")
+    [first] = orders(session, position, OrderPurpose.OPEN)
+    assert first.reprice_step == 0 and first.limit_price == Decimal("1.00")
+    assert position.entry_mid == Decimal("1") and position.entry_natural == Decimal("0.9")
+
+    reprice_entries(session, broker)
+    assert len(orders(session, position, OrderPurpose.OPEN)) == 1  # too early
+
+    limits = []
+    for _ in range(4):
+        last = orders(session, position, OrderPurpose.OPEN)[-1]
+        last.submitted_at -= timedelta(minutes=PARAMS.entry_reprice_minutes)
+        reprice_entries(session, broker)
+        limits.append(float(orders(session, position, OrderPurpose.OPEN)[-1].limit_price))
+    # Mid 1.00 to natural 0.90 in three steps, then the last step stays.
+    assert limits == [0.97, 0.93, 0.9, 0.9]
+    sent = orders(session, position, OrderPurpose.OPEN)
+    assert [o.status for o in sent[:-1]] == [OrderStatus.CANCELED] * 3
+    assert all(o.replaced for o in sent[:-1]) and sent[-1].reprice_step == 3
+    assert position.status == PositionStatus.PENDING  # canceled for a new step, not abandoned
+
+    broker.fill(broker.last()[0], {SHORT: 2.0, LONG: 1.1})
+    sync_orders(session, broker)
+    assert position.status == PositionStatus.OPEN
+    # Exits work from the credit actually filled: 0.90, not the 1.00 mid.
+    assert position.entry_credit == Decimal("0.9")
+    assert broker.last()[1].limit_price == take_profit_price(0.9, PARAMS)
+
+
+def test_a_limit_set_by_hand_is_never_moved(session: Session) -> None:
+    broker = FakeBroker()
+    position = accept(session, broker, spread(session).id, "click-0001", limit_price=1.02)
+    [order] = orders(session, position, OrderPurpose.OPEN)
+    order.submitted_at -= timedelta(hours=1)
+
+    reprice_entries(session, broker)
+
+    assert order.reprice_step is None and len(orders(session, position, OrderPurpose.OPEN)) == 1
 
 
 def test_time_exit_at_21_dte(session: Session) -> None:
@@ -346,7 +458,8 @@ def test_time_exit_at_21_dte(session: Session) -> None:
     [time_exit] = orders(session, position, OrderPurpose.TIME_EXIT)
     [target] = orders(session, position, OrderPurpose.TAKE_PROFIT)
     assert target.status == OrderStatus.CANCELED
-    assert time_exit.limit_price == Decimal("0.90")  # natural 1.6 - 0.7
+    # Mid 0.80, natural 1.6 - 0.7 = 0.90: first step at a third of the way, rounded up.
+    assert time_exit.limit_price == Decimal("0.84")
     assert PositionEventType.TIME_EXIT_TRIGGERED in events(position)
 
 
@@ -467,6 +580,7 @@ def test_only_a_true_wheel_put_waits_for_assignment(
     broker.quotes = {SOFI_PUT: Quote(1.50, 1.60)}  # four times the credit
 
     check_exits(session, broker, TODAY + timedelta(days=5))
+    check_exits(session, broker, TODAY + timedelta(days=5))  # the stop needs two marks
 
     assert bool(orders(session, position, OrderPurpose.STOP_LOSS)) == stopped
     broker.activities = [Activity("a1", ASSIGNMENT, SOFI_PUT, 1, TODAY + timedelta(days=10))]

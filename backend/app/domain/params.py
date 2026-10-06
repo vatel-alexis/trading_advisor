@@ -133,6 +133,27 @@ class StrategyParams:
     stop_loss_multiple: float = 2.0
     use_time_exit: bool = True
     exit_dte: int = 21
+    # The cost stop compares the expected buy-back price (mid + this share of the mid-to-natural
+    # gap) with the stop level, and needs it on `stop_confirmations` consecutive marks: a mid
+    # alone touching the level on a wide quote does not buy back.
+    stop_confirmations: int = 2
+    exit_slippage_share: float = 0.5
+    # Other stop signals (a True Wheel put and a covered call are never stopped).
+    use_stop_delta: bool = True
+    stop_delta: float = 0.50  # |delta| of the short leg
+    use_stop_breach: bool = True
+    stop_breach_pct: float = 0.0  # underlying this far below the short put strike
+    use_stop_liquidity: bool = True
+    max_exit_spread_pct: float = 0.50  # natural - mid, as a share of the credit, while losing
+    use_stop_event: bool = True
+    event_exit_days: int = 2  # earnings within this many days, before the expiration
+    use_stop_portfolio: bool = True  # drawdown limit reached: the worst losing position goes
+
+    # Progressive limit orders: entries start at the mid, stop and time exits one step past it,
+    # and each re-pricing moves the limit 1/limit_steps of the way to the natural price.
+    limit_steps: int = 3
+    entry_reprice_minutes: int = 10
+    exit_reprice_minutes: int = 5
 
     # IV Rank: real IV history once enough days are stored, else a realized-volatility proxy.
     iv_rank_min_history: int = 120
@@ -282,6 +303,8 @@ PARAM_GROUPS = (
     ("risk", "Risque et taille"),
     ("safety", "Garde-fous (blocage des entrées)"),
     ("exits", "Sorties"),
+    ("stops", "Signaux de stop"),
+    ("execution", "Exécution des ordres"),
     ("score", "Score de classement"),
 )
 
@@ -417,6 +440,38 @@ PARAM_SPECS: tuple[ParamSpec, ...] = (
               "Sans elle, la position va à l'échéance."),
     ParamSpec("exit_dte", "Sortie à DTE", "exits", "int", toggle="use_time_exit", minimum=0,
               maximum=180),
+    ParamSpec("stop_confirmations", "Relevés consécutifs pour confirmer le stop", "stops", "int",
+              "Le stop de coût compare le prix de rachat attendu (pas le mid seul) au seuil, "
+              "sur ce nombre de relevés de 5 minutes.", toggle="use_stop_loss", minimum=1,
+              maximum=6),
+    ParamSpec("use_stop_delta", "Stop sur le delta", "stops", "bool"),
+    ParamSpec("stop_delta", "Delta max de la jambe vendue", "stops", "float",
+              toggle="use_stop_delta", minimum=0.2, maximum=1, step=0.05),
+    ParamSpec("use_stop_breach", "Stop sur le sous-jacent", "stops", "bool",
+              "Le sous-jacent passe sous le strike vendu."),
+    ParamSpec("stop_breach_pct", "Marge sous le strike", "stops", "pct",
+              toggle="use_stop_breach", minimum=0, maximum=0.2, step=0.005),
+    ParamSpec("use_stop_liquidity", "Stop sur la liquidité", "stops", "bool",
+              "Position perdante dont l'écart de liquidation devient trop large."),
+    ParamSpec("max_exit_spread_pct", "Écart de liquidation max (part du crédit)", "stops", "pct",
+              toggle="use_stop_liquidity", minimum=0.05, maximum=2, step=0.05),
+    ParamSpec("use_stop_event", "Sortie avant résultats", "stops", "bool",
+              "Résultats annoncés avant l'échéance."),
+    ParamSpec("event_exit_days", "Jours avant les résultats", "stops", "int",
+              toggle="use_stop_event", minimum=0, maximum=10),
+    ParamSpec("use_stop_portfolio", "Stop sur le risque du portefeuille", "stops", "bool",
+              "Drawdown max atteint : la position la plus perdante est rachetée à chaque "
+              "passage."),
+    ParamSpec("exit_slippage_share", "Glissement estimé (part de l'écart mid / naturel)",
+              "execution", "pct", "Sert au prix de rachat attendu et au glissement estimé.",
+              minimum=0, maximum=1, step=0.05),
+    ParamSpec("limit_steps", "Paliers de l'ordre limite jusqu'au naturel", "execution", "int",
+              "Entrée au mid puis rapprochée du naturel palier par palier ; 0 : naturel direct.",
+              minimum=0, maximum=6),
+    ParamSpec("entry_reprice_minutes", "Minutes entre deux paliers à l'entrée", "execution",
+              "int", minimum=5, maximum=120),
+    ParamSpec("exit_reprice_minutes", "Minutes entre deux paliers en sortie", "execution", "int",
+              minimum=1, maximum=60),
     ParamSpec("score_weight_execution", "Poids exécution et liquidité", "score", "float",
               "Écart bid/ask, écart mid/naturel, open interest.", minimum=0, maximum=1,
               step=0.05),

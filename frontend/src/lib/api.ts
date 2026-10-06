@@ -196,6 +196,7 @@ export type OptionPosition = {
   legs: { symbol: string; type: string | null; side: string; strike: number | null }[];
   entry_credit: number | null;
   open_limit: number | null;
+  open_step: number | null;
   collateral: number;
   max_loss: number | null;
   mark: number | null;
@@ -203,8 +204,29 @@ export type OptionPosition = {
   unrealized_pnl: number | null;
   profit_pct: number | null;
   take_profit_price: number | null;
-  exit_order: { purpose: string; limit: number | null } | null;
+  exit_order: { purpose: string; limit: number | null; step: number | null } | null;
+  execution: Execution;
   can_close: boolean;
+};
+
+export type StopRule = { key: string; label: string; rule: string };
+
+// Per share. Slippage is positive when the fill gave up part of the mid.
+export type Execution = {
+  entry_mid: number | null;
+  entry_natural: number | null;
+  entry_fill: number | null;
+  entry_slippage: number | null;
+  entry_slippage_estimated: number | null;
+  mid: number | null;
+  natural: number | null;
+  liquidation_spread: number | null;
+  expected_exit: number | null;
+  delta: number | null;
+  underlying_price: number | null;
+  stop_price: number | null;
+  stop_rules: StopRule[];
+  limit_steps: number;
 };
 
 export type ShareLot = {
@@ -236,6 +258,8 @@ export type HistoryRow = {
   pnl: number | null;
   reason: string | null;
   note: string | null;
+  entry_slippage: number | null;
+  exit_slippage: number | null;
 };
 
 export type History = { rows: HistoryRow[]; underlyings: string[] };

@@ -140,7 +140,8 @@ def test_find_order_returns_none_when_unknown() -> None:
 
 def test_quotes_and_activities_are_parsed() -> None:
     recorder = Recorder(
-        (200, {"snapshots": {SPREAD[0][0]: {"latestQuote": {"bp": 0.25, "ap": 0.27}}}}),
+        (200, {"snapshots": {SPREAD[0][0]: {"latestQuote": {"bp": 0.25, "ap": 0.27},
+                                            "greeks": {"delta": -0.21}}}}),
         (
             200,
             [
@@ -156,8 +157,18 @@ def test_quotes_and_activities_are_parsed() -> None:
     quotes = broker.option_quotes([s for s, _ in SPREAD])
     activities = broker.option_activities(date(2026, 10, 1))
 
-    assert quotes == {SPREAD[0][0]: Quote(0.25, 0.27)}
+    assert quotes == {SPREAD[0][0]: Quote(0.25, 0.27, delta=-0.21)}
     assert "feed=indicative" in recorder.calls[0][1]
     assert recorder.calls[0][1].startswith("https://data.alpaca.markets/v1beta1/options/snapshots")
     assert [(a.kind, a.quantity) for a in activities] == [(ASSIGNMENT, 2), (EXPIRATION, 2)]
     assert "after=2026-10-01" in recorder.calls[1][1]
+
+
+def test_underlying_prices_come_from_the_last_trades() -> None:
+    recorder = Recorder((200, {"trades": {"SPY": {"p": 571.2}, "SOFI": {"p": 15.03}}}))
+    broker = AlpacaBroker("k", "s", transport=recorder)
+
+    assert broker.stock_prices(["SPY", "SOFI", "SPY"]) == {"SPY": 571.2, "SOFI": 15.03}
+    assert recorder.calls[0][1].startswith("https://data.alpaca.markets/v2/stocks/trades/latest")
+    assert "feed=iex" in recorder.calls[0][1] and "SPY%2CSOFI" in recorder.calls[0][1]
+    assert broker.stock_prices([]) == {}

@@ -108,6 +108,30 @@ Chaque candidat reçoit des notes séparées (0 à 1), stockées avec le deal :
 - Migration 0006 : écrit ces réglages dans Prudent (nouvelle version active s'il l'est) ;
   Actuel garde son filtre AROC sans minimum de qualité.
 
+## Exécution et sorties (lot 4)
+
+- Les sorties partent du crédit réellement exécuté : objectif 50 % en GTC, stop à 2 fois ce
+  crédit.
+- Stop de coût : il compare le prix de rachat attendu (mid + 50 % de l'écart jusqu'au naturel,
+  `exit_slippage_share`) au seuil, et il faut 2 relevés de suite (`stop_confirmations`). Un mid
+  qui touche le seuil une fois sur une cotation large ne rachète pas.
+- Autres signaux de stop, chacun désactivable : delta de la jambe vendue ≥ 0,50, sous-jacent
+  sous le strike vendu, écart de liquidation ≥ 50 % du crédit sur une position perdante,
+  résultats dans 2 jours ou moins avant l'échéance, drawdown max du compte atteint (la
+  position la plus perdante est rachetée à chaque passage). Une donnée absente (pas de delta,
+  pas de cours) ne déclenche rien. True Wheel et covered calls n'ont aucun stop.
+- Ordres limites progressifs (`limit_steps` = 3) : l'entrée part du mid puis se rapproche du
+  naturel d'un tiers toutes les 10 minutes, sans descendre sous le crédit proposé moins 25 % ;
+  un prix saisi à la main ne bouge pas. Stop et sortie à 21 DTE partent à un tiers du chemin
+  puis avancent toutes les 5 minutes jusqu'au naturel.
+- Un stop envoie un ordre limite : il ne garantit pas le prix d'exécution (gap, écart qui
+  s'élargit). La page Positions montre mid, naturel, écart de liquidation, prix de rachat
+  attendu, glissement estimé et glissement observé ; l'historique montre le glissement de
+  chaque entrée et sortie par rapport au mid.
+- Migration 0007 : colonnes de cotations (mid et naturel à l'entrée et à la sortie, naturel et
+  cours du sous-jacent à chaque relevé), palier des ordres. Les nouveaux réglages prennent
+  leur valeur par défaut dans tous les profils.
+
 ## Migrations sur la base hébergée
 
 Les migrations Alembic atteignent Neon par le workflow GitHub Actions `Worker` : chaque passage

@@ -116,6 +116,15 @@ def test_dashboard_and_positions_show_capital_and_the_last_mark(session: Session
     assert row["profit_pct"] == round(0.45 / 1.05, 4)
     assert row["take_profit_price"] == take_profit_price(1.05, PARAMS) and row["can_close"]
     assert [leg["strike"] for leg in row["legs"]] == [500, 495]
+    # Accepted at a 1.00 mid (0.90 natural), filled at 1.05: better than the mid.
+    execution = row["execution"]
+    assert execution["entry_mid"] == 1.0 and execution["entry_natural"] == 0.9
+    assert execution["entry_fill"] == 1.05 and execution["entry_slippage"] == -0.05
+    assert execution["entry_slippage_estimated"] == 0.05
+    # Buy-back now: mid 0.60, natural 1.1 - 0.4 = 0.70.
+    assert execution["natural"] == 0.7 and execution["liquidation_spread"] == 0.1
+    assert execution["expected_exit"] == 0.65 and execution["stop_price"] == 2.1
+    assert [r["key"] for r in execution["stop_rules"]][0] == "cost"
     assert session.query(PositionMark).count() >= 1
 
 

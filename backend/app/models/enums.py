@@ -94,3 +94,4 @@ class PositionEventType(enum.StrEnum):
     CALLED_AWAY = "called_away"
     RECONCILIATION_MISMATCH = "reconciliation_mismatch"
     ORDER_REJECTED = "order_rejected"
+    ORDER_REPRICED = "order_repriced"

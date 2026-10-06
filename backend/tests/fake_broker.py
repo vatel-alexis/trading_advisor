@@ -13,6 +13,7 @@ class FakeBroker:
         self.requests: dict[str, OrderRequest] = {}
         self.orders: dict[str, BrokerOrder] = {}
         self.quotes: dict[str, Quote] = {}
+        self.prices: dict[str, float] = {}
         self.activities: list[Activity] = []
         self.is_open = True
         self.fail_next: BrokerError | None = None
@@ -71,6 +72,11 @@ class FakeBroker:
         if self.down:
             raise BrokerError("Alpaca injoignable")
         return {s: self.quotes[s] for s in symbols if s in self.quotes}
+
+    def stock_prices(self, symbols: Sequence[str]) -> dict[str, float]:
+        if self.down:
+            raise BrokerError("Alpaca injoignable")
+        return {s: self.prices[s] for s in symbols if s in self.prices}
 
     def option_activities(self, since: date) -> list[Activity]:
         return [a for a in self.activities if a.day >= since]

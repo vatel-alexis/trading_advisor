@@ -2,7 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import JSON, Date, DateTime, ForeignKey, String
+from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, String, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, Ratio, Timestamped
@@ -45,6 +45,12 @@ class Position(Timestamped, Base):
     max_loss: Mapped[Decimal | None]
     stress_loss: Mapped[Decimal | None]
     realized_pnl: Mapped[Decimal | None]
+    # Net quotes per share when the position was accepted (credit) and when its exit was
+    # decided (cost to close), to compare the fills with the mid and the natural price.
+    entry_mid: Mapped[Decimal | None]
+    entry_natural: Mapped[Decimal | None]
+    exit_mid: Mapped[Decimal | None]
+    exit_natural: Mapped[Decimal | None]
     exit_reason: Mapped[ExitReason | None] = mapped_column(pg_enum(ExitReason, "exit_reason"))
 
     legs: Mapped[list["PositionLeg"]] = relationship(
@@ -91,6 +97,10 @@ class Order(Timestamped, Base):
     quote_bid: Mapped[Decimal | None]
     quote_ask: Mapped[Decimal | None]
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Progressive limit: the step of this try (None: fixed price), and whether it was canceled
+    # to be sent again one step closer to the natural price.
+    reprice_step: Mapped[int | None]
+    replaced: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 
     position: Mapped[Position] = relationship(back_populates="orders")
     fills: Mapped[list["Fill"]] = relationship(back_populates="order")
@@ -134,3 +144,6 @@ class PositionMark(Base):
     mark: Mapped[Decimal]
     delta: Mapped[Decimal | None] = mapped_column(Ratio)
     unrealized_pnl: Mapped[Decimal]
+    # Cost to close at the natural price (natural - mark is the liquidation spread).
+    natural: Mapped[Decimal | None]
+    underlying_price: Mapped[Decimal | None]

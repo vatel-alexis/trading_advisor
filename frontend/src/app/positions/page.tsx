@@ -1,8 +1,10 @@
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { CloseButton } from "@/components/CloseButton";
+import { ExecutionDetails } from "@/components/ExecutionDetails";
 import { ApiDown } from "@/components/Stat";
 import { getPositions, type OptionPosition } from "@/lib/api";
 import { STRATEGY_LABEL, dateTime, day, pct, pnlClass, price, signed, strikes, usd } from "@/lib/format";
+import { Fragment } from "react";
 
 export const dynamic = "force-dynamic";
 
@@ -12,14 +14,30 @@ const EXIT_LABEL: Record<string, string> = {
   manual_close: "Rachat en cours",
 };
 
+function Step({ step, steps }: { step: number | null | undefined; steps: number }) {
+  if (step == null || steps <= 0) return null;
+  return (
+    <>
+      {" "}
+      (palier {Math.min(step, steps)}/{steps})
+    </>
+  );
+}
+
 function State({ p }: { p: OptionPosition }) {
   if (p.status === "pending") {
-    return <span className="text-warning">Ordre d&apos;ouverture à {price(p.open_limit)}</span>;
+    return (
+      <span className="text-warning">
+        Ordre d&apos;ouverture à {price(p.open_limit)}
+        <Step step={p.open_step} steps={p.execution.limit_steps} />
+      </span>
+    );
   }
   if (p.exit_order) {
     return (
       <span className="text-warning">
         {EXIT_LABEL[p.exit_order.purpose] ?? p.exit_order.purpose} à {price(p.exit_order.limit)}
+        <Step step={p.exit_order.step} steps={p.execution.limit_steps} />
       </span>
     );
   }
@@ -36,8 +54,10 @@ export default async function Page() {
       <div>
         <h1 className="font-display text-2xl font-extrabold tracking-tight md:text-3xl">Positions ouvertes</h1>
         <p className="text-sm opacity-70">
-          Mark au milieu bid/ask, relevé toutes les 5 minutes pendant la séance. Le rachat manuel annule l&apos;ordre de
-          prise de profit puis rachète au prix naturel (marché ouvert uniquement).
+          Mark au milieu bid/ask, relevé toutes les 5 minutes pendant la séance avec le prix naturel. Les sorties se
+          calculent sur le crédit exécuté. Le stop se déclenche sur le prix de rachat attendu confirmé sur plusieurs
+          relevés, pas sur le mid seul, et envoie un ordre limite : il ne garantit pas le prix d&apos;exécution. Le
+          rachat manuel annule l&apos;ordre de prise de profit puis rachète au prix naturel (marché ouvert uniquement).
         </p>
       </div>
       {data === null ? (
@@ -45,9 +65,7 @@ export default async function Page() {
       ) : (
         <>
           {data.options.length === 0 ? (
-            <p className="rounded-2xl border border-line bg-surface p-4 text-sm opacity-70">
-              Aucune position ouverte.
-            </p>
+            <p className="rounded-2xl border border-line bg-surface p-4 text-sm opacity-70">Aucune position ouverte.</p>
           ) : (
             <>
               {/* Phones: one card per position, the table needs a wider screen. */}
@@ -63,7 +81,9 @@ export default async function Page() {
                         <div className={`font-display text-lg font-bold tabular-nums ${pnlClass(p.unrealized_pnl)}`}>
                           {signed(p.unrealized_pnl)}
                         </div>
-                        <div className={`text-xs tabular-nums ${pnlClass(p.profit_pct)}`}>{pct(p.profit_pct)} du crédit</div>
+                        <div className={`text-xs tabular-nums ${pnlClass(p.profit_pct)}`}>
+                          {pct(p.profit_pct)} du crédit
+                        </div>
                       </div>
                     </header>
                     <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-[13px]">
@@ -99,6 +119,9 @@ export default async function Page() {
                       </div>
                       {p.can_close ? <CloseButton id={p.id} /> : null}
                     </div>
+                    <div className="mt-3 border-t border-line/70 pt-3">
+                      <ExecutionDetails p={p} />
+                    </div>
                   </article>
                 ))}
               </div>
@@ -120,33 +143,42 @@ export default async function Page() {
                   </thead>
                   <tbody>
                     {data.options.map((p) => (
-                      <tr key={p.id} className="border-t border-line/70">
-                        <td className="px-3 py-2">
-                          <div className="font-medium">{p.underlying}</div>
-                          <div className="text-xs opacity-60">{STRATEGY_LABEL[p.strategy]}</div>
-                        </td>
-                        <td className="px-3 py-2 font-mono text-xs">{strikes(p.legs.map((l) => l.strike))}</td>
-                        <td className="px-3 py-2">
-                          {day(p.expiration)}
-                          <div className="text-xs opacity-60">{p.dte != null ? `${p.dte} j` : ""}</div>
-                        </td>
-                        <td className="px-3 py-2 text-right tabular-nums">{p.contracts}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">{price(p.entry_credit)}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">
-                          {price(p.mark)}
-                          <div className="text-xs opacity-60">{p.marked_at ? dateTime(p.marked_at) : "pas encore"}</div>
-                        </td>
-                        <td className={`px-3 py-2 text-right tabular-nums ${pnlClass(p.unrealized_pnl)}`}>
-                          {signed(p.unrealized_pnl)}
-                        </td>
-                        <td className={`px-3 py-2 text-right tabular-nums ${pnlClass(p.profit_pct)}`}>
-                          {pct(p.profit_pct)}
-                        </td>
-                        <td className="px-3 py-2 text-xs">
-                          <State p={p} />
-                        </td>
-                        <td className="px-3 py-2 text-right">{p.can_close ? <CloseButton id={p.id} /> : null}</td>
-                      </tr>
+                      <Fragment key={p.id}>
+                        <tr className="border-t border-line/70">
+                          <td className="px-3 py-2">
+                            <div className="font-medium">{p.underlying}</div>
+                            <div className="text-xs opacity-60">{STRATEGY_LABEL[p.strategy]}</div>
+                          </td>
+                          <td className="px-3 py-2 font-mono text-xs">{strikes(p.legs.map((l) => l.strike))}</td>
+                          <td className="px-3 py-2">
+                            {day(p.expiration)}
+                            <div className="text-xs opacity-60">{p.dte != null ? `${p.dte} j` : ""}</div>
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums">{p.contracts}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{price(p.entry_credit)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">
+                            {price(p.mark)}
+                            <div className="text-xs opacity-60">
+                              {p.marked_at ? dateTime(p.marked_at) : "pas encore"}
+                            </div>
+                          </td>
+                          <td className={`px-3 py-2 text-right tabular-nums ${pnlClass(p.unrealized_pnl)}`}>
+                            {signed(p.unrealized_pnl)}
+                          </td>
+                          <td className={`px-3 py-2 text-right tabular-nums ${pnlClass(p.profit_pct)}`}>
+                            {pct(p.profit_pct)}
+                          </td>
+                          <td className="px-3 py-2 text-xs">
+                            <State p={p} />
+                          </td>
+                          <td className="px-3 py-2 text-right">{p.can_close ? <CloseButton id={p.id} /> : null}</td>
+                        </tr>
+                        <tr>
+                          <td colSpan={10} className="px-3 pb-3">
+                            <ExecutionDetails p={p} />
+                          </td>
+                        </tr>
+                      </Fragment>
                     ))}
                   </tbody>
                 </table>

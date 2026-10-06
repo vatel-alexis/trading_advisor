@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.domain.exits import ShortPremium, expected_exit, stop_price, stop_rules
 from app.domain.params import StrategyParams
 from app.domain.risk import Exposure, Portfolio, cluster_of, expiration_concentration
 from app.models import (
@@ -36,7 +37,7 @@ from app.models.enums import (
 )
 from app.services.safety import losses, open_exposures
 from app.services.screening import ACTIVE, account_state, active_config
-from app.services.trading import LIVE
+from app.services.trading import LIVE, position_params
 
 FINISHED = (
     PositionStatus.CLOSED,
@@ -482,6 +483,43 @@ def _orders_by_position(session: Session, ids: list[int]) -> dict[int, list[Orde
     return rows
 
 
+def _diff(a: float | None, b: float | None) -> float | None:
+    return None if a is None or b is None else round(a - b, 4)
+
+
+def _execution(
+    p: Position, mark: PositionMark | None, params: StrategyParams, rules: list[dict[str, str]]
+) -> dict[str, Any]:
+    """Quotes against fills, per share: entry slippage (mid - fill credit, positive when the
+    fill gave up part of the mid), the liquidation spread and the expected buy-back now."""
+    credit = _f(p.entry_credit)
+    entry_mid, entry_natural = _f(p.entry_mid), _f(p.entry_natural)
+    mid = _f(mark.mark) if mark else None
+    natural = _f(mark.natural) if mark else None
+    expected = expected_exit(mid, natural, params) if mid is not None else None
+    estimated = None
+    if entry_mid is not None and entry_natural is not None:
+        estimated = round(params.exit_slippage_share * max(entry_mid - entry_natural, 0), 4)
+    return {
+        "entry_mid": entry_mid,
+        "entry_natural": entry_natural,
+        "entry_fill": credit,
+        "entry_slippage": _diff(entry_mid, credit),
+        "entry_slippage_estimated": estimated,
+        "mid": mid,
+        "natural": natural,
+        "liquidation_spread": _diff(natural, mid),
+        "expected_exit": None if expected is None else round(expected, 4),
+        "delta": _f(mark.delta) if mark else None,
+        "underlying_price": _f(mark.underlying_price) if mark else None,
+        "stop_price": (
+            stop_price(credit, params) if credit and rules and params.use_stop_loss else None
+        ),
+        "stop_rules": rules,
+        "limit_steps": params.limit_steps,
+    }
+
+
 def positions(session: Session, today: date) -> dict[str, Any]:
     """Pending and open option positions with their last mark, and the share lots held."""
     rows = session.scalars(
@@ -515,6 +553,16 @@ def positions(session: Session, today: date) -> dict[str, Any]:
         )
         mark = marks.get(p.id)
         credit = _f(p.entry_credit)
+        params = position_params(session, p)
+        short = next((leg for leg in legs if leg.side == Side.SELL), None)
+        accepted = p.strategy_type == StrategyType.CASH_SECURED_PUT and params.assignment_accepted(
+            p.underlying
+        )
+        rules = stop_rules(
+            ShortPremium(p.strategy_type.value, credit or 0.0, expiration or today, accepted),
+            params,
+            _f(short.strike) if short else None,
+        )
         profit_pct = None
         if mark is not None and credit:
             profit_pct = round((credit - float(mark.mark)) / credit, 4)
@@ -539,6 +587,7 @@ def positions(session: Session, today: date) -> dict[str, Any]:
                 ],
                 "entry_credit": credit,
                 "open_limit": _f(opening.limit_price) if opening else None,
+                "open_step": opening.reprice_step if opening else None,
                 "collateral": float(p.collateral),
                 "max_loss": _f(p.max_loss),
                 "mark": _f(mark.mark) if mark else None,
@@ -547,10 +596,15 @@ def positions(session: Session, today: date) -> dict[str, Any]:
                 "profit_pct": profit_pct,
                 "take_profit_price": _f(target.limit_price) if target else None,
                 "exit_order": (
-                    {"purpose": exit_order.purpose.value, "limit": _f(exit_order.limit_price)}
+                    {
+                        "purpose": exit_order.purpose.value,
+                        "limit": _f(exit_order.limit_price),
+                        "step": exit_order.reprice_step,
+                    }
                     if exit_order
                     else None
                 ),
+                "execution": _execution(p, mark, params, rules),
                 "can_close": p.status == PositionStatus.OPEN and exit_order is None,
             }
         )
@@ -635,6 +689,9 @@ def history(session: Session, f: HistoryFilter, limit: int = 500) -> list[dict[s
                     "pnl": _f(p.realized_pnl),
                     "reason": p.exit_reason.value if p.exit_reason else None,
                     "note": None,
+                    # Per share, positive when the fill was worse than the mid.
+                    "entry_slippage": _diff(_f(p.entry_mid), _f(p.entry_credit)),
+                    "exit_slippage": _diff(_f(p.exit_debit), _f(p.exit_mid)),
                 }
             )
 
@@ -685,6 +742,8 @@ def history(session: Session, f: HistoryFilter, limit: int = 500) -> list[dict[s
                         else None
                     ),
                     "note": decision.note if decision else None,
+                    "entry_slippage": None,
+                    "exit_slippage": None,
                 }
             )
 
