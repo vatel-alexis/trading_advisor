@@ -4,7 +4,17 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 
 import { activateProfile, createProfile, deleteProfile, launchBacktest, saveProfile } from "@/app/actions";
-import type { ActionResult, ParamField, ParamValue, Params, Profile, RiskVerdict } from "@/lib/api";
+import { DELETE_CONFIRM } from "@/components/DeleteProfileButton";
+import type {
+  ActionResult,
+  ParamField,
+  ParamValue,
+  Params,
+  Profile,
+  RiskLevel,
+  RiskVerdict,
+  SimpleGroup,
+} from "@/lib/api";
 import { pct } from "@/lib/format";
 
 // Form values are kept as typed by the user (strings for numbers and lists); they are
@@ -49,12 +59,16 @@ export function ProfileEditor({
   fields,
   groups,
   defaults,
+  simpleGroups,
+  riskLevels,
   backtestDefaults,
 }: {
   profile: Profile;
   fields: ParamField[];
   groups: { key: string; label: string }[];
   defaults: Params;
+  simpleGroups: SimpleGroup[];
+  riskLevels: RiskLevel[];
   backtestDefaults: { start: string; end: string; capital: number };
 }) {
   const router = useRouter();
@@ -84,6 +98,27 @@ export function ProfileEditor({
 
   const params = () => paramsOf(fields, draft);
 
+  const byKey = new Map(fields.map((f) => [f.key, f]));
+  const simpleKeys = new Set(simpleGroups.flatMap((g) => g.fields));
+  // Advanced settings that differ from the defaults, counted on the collapsed section.
+  const advancedChanged = fields.filter((f) => !simpleKeys.has(f.key) && draft[f.key] !== defaultDraft[f.key]).length;
+
+  const input = (f: ParamField, hideWhenOff: boolean) => {
+    const off = f.toggle != null && draft[f.toggle] === false;
+    if (off && hideWhenOff) return null;
+    return (
+      <FieldInput
+        key={f.key}
+        field={f}
+        value={draft[f.key]}
+        defaultValue={defaultDraft[f.key]}
+        changed={dirtyKeys.includes(f.key)}
+        disabled={off}
+        onChange={(v) => setDraft((d) => ({ ...d, [f.key]: v }))}
+      />
+    );
+  };
+
   return (
     <div className="space-y-4">
       {risk ? <RiskPanel risk={risk} /> : null}
@@ -103,26 +138,64 @@ export function ProfileEditor({
         </label>
       </div>
 
-      {groups.map((group) => (
+      {simpleGroups.map((group) => (
         <fieldset key={group.key} className="rounded-2xl border border-line bg-surface p-4">
           <legend className="px-1 text-sm font-semibold">{group.label}</legend>
+          <p className="mb-3 text-xs opacity-60">{group.description}</p>
+          {group.key === "risk" && riskLevels.length ? (
+            <RiskLevelPicker
+              levels={riskLevels}
+              byKey={byKey}
+              draft={draft}
+              onPick={(values) =>
+                setDraft((d) => ({
+                  ...d,
+                  ...Object.fromEntries(
+                    Object.entries(values).flatMap(([k, v]) => {
+                      const f = byKey.get(k);
+                      return f ? [[k, toDraft(f, v)] as [string, string | boolean]] : [];
+                    }),
+                  ),
+                }))
+              }
+            />
+          ) : null}
           <div className="grid gap-x-6 gap-y-3 md:grid-cols-2">
-            {fields
-              .filter((f) => f.group === group.key)
-              .map((f) => (
-                <FieldInput
-                  key={f.key}
-                  field={f}
-                  value={draft[f.key]}
-                  defaultValue={defaultDraft[f.key]}
-                  changed={dirtyKeys.includes(f.key)}
-                  disabled={f.toggle != null && draft[f.toggle] === false}
-                  onChange={(v) => setDraft((d) => ({ ...d, [f.key]: v }))}
-                />
-              ))}
+            {group.fields.flatMap((k) => {
+              const f = byKey.get(k);
+              return f ? [input(f, true)] : [];
+            })}
           </div>
         </fieldset>
       ))}
+
+      <details className="group rounded-2xl border border-line bg-surface">
+        <summary className="cursor-pointer list-none p-4 text-sm font-semibold [&::-webkit-details-marker]:hidden">
+          <span className="mr-1 inline-block transition-transform group-open:rotate-90">›</span>
+          Réglages avancés
+          <span className="ml-2 text-xs font-normal opacity-60">
+            {advancedChanged === 0
+              ? "tous aux valeurs par défaut"
+              : `${advancedChanged} différent(s) des valeurs par défaut`}
+          </span>
+        </summary>
+        <div className="space-y-4 px-4 pb-4">
+          <p className="text-xs opacity-60">
+            Filtres, garde-fous, stops et exécution. Les valeurs par défaut sont celles du profil Prudent : ne les
+            change que pour un backtest précis. Le glossaire en haut de page explique chaque terme.
+          </p>
+          {groups.map((group) => {
+            const shown = fields.filter((f) => f.group === group.key && !simpleKeys.has(f.key));
+            if (!shown.length) return null;
+            return (
+              <fieldset key={group.key} className="rounded-2xl border border-line p-4">
+                <legend className="px-1 text-sm font-semibold">{group.label}</legend>
+                <div className="grid gap-x-6 gap-y-3 md:grid-cols-2">{shown.map((f) => input(f, false))}</div>
+              </fieldset>
+            );
+          })}
+        </div>
+      </details>
 
       <div className="sticky bottom-0 space-y-2 rounded-2xl border border-line bg-surface/95 p-3 shadow-lg backdrop-blur">
         <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -200,7 +273,7 @@ export function ProfileEditor({
             <button
               disabled={pending}
               onClick={() => {
-                if (window.confirm(`Supprimer le profil « ${profile.name} » ?`)) {
+                if (window.confirm(DELETE_CONFIRM(profile.name))) {
                   run(
                     () => deleteProfile(profile.id),
                     () => router.push("/reglages"),
@@ -369,6 +442,47 @@ function FieldInput({
       </span>
       {hint}
     </label>
+  );
+}
+
+// Risk level of the simple view: a few preset values; "Personnalisé" when none matches.
+function RiskLevelPicker({
+  levels,
+  byKey,
+  draft,
+  onPick,
+}: {
+  levels: RiskLevel[];
+  byKey: Map<string, ParamField>;
+  draft: Draft;
+  onPick: (values: Record<string, number>) => void;
+}) {
+  const matches = (level: RiskLevel) =>
+    Object.entries(level.values).every(([k, v]) => {
+      const f = byKey.get(k);
+      return f != null && draft[k] === toDraft(f, v);
+    });
+  const current = levels.find(matches);
+  return (
+    <div className="mb-4 space-y-2">
+      <div className="text-xs opacity-60">Niveau de risque</div>
+      <div className="grid gap-2 sm:grid-cols-3">
+        {levels.map((level) => (
+          <button
+            key={level.key}
+            type="button"
+            onClick={() => onPick(level.values)}
+            className={`rounded-xl border p-2.5 text-left text-sm ${
+              level === current ? "border-accent/60 bg-surface-2" : "border-line hover:bg-surface-2"
+            }`}
+          >
+            <div className="font-medium">{level.label}</div>
+            <div className="text-xs opacity-60">{level.description}</div>
+          </button>
+        ))}
+      </div>
+      {current ? null : <p className="text-xs text-warning">Personnalisé : les valeurs ci-dessous ne suivent aucun niveau.</p>}
+    </div>
   );
 }
 

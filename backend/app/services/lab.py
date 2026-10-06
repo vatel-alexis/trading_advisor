@@ -23,6 +23,8 @@ from app.domain.params import (
     ETFS,
     PARAM_GROUPS,
     PARAM_SPECS,
+    RISK_LEVELS,
+    SIMPLE_GROUPS,
     InvalidParams,
     StrategyParams,
     parse_params,
@@ -164,6 +166,14 @@ def param_specs() -> dict[str, Any]:
             for s in PARAM_SPECS
         ],
         "defaults": StrategyParams().to_dict(),
+        "simple_groups": [
+            {"key": k, "label": label, "description": text, "fields": list(keys)}
+            for k, label, text, keys in SIMPLE_GROUPS
+        ],
+        "risk_levels": [
+            {"key": k, "label": label, "description": text, "values": values}
+            for k, label, text, values in RISK_LEVELS
+        ],
     }
 
 

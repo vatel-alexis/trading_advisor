@@ -338,16 +338,21 @@ PARAM_SPECS: tuple[ParamSpec, ...] = (
               "standards."),
     ParamSpec("large_caps", "Liste des grandes valeurs", "experimental", "symbols",
               toggle="enable_large_caps"),
-    ParamSpec("dte_min", "DTE min à l'entrée", "filters", "int", minimum=1, maximum=365),
-    ParamSpec("dte_max", "DTE max à l'entrée", "filters", "int", minimum=1, maximum=365),
+    ParamSpec("dte_min", "DTE min à l'entrée", "filters", "int",
+              "Jours avant l'échéance de l'option vendue. Conseillé : 45.", minimum=1,
+              maximum=365),
+    ParamSpec("dte_max", "DTE max à l'entrée", "filters", "int", "Conseillé : 65.", minimum=1,
+              maximum=365),
     ParamSpec("min_holding_days", "Fenêtre de détention min (jours)", "filters", "int",
               "DTE d'entrée moins DTE de sortie : rejette les entrées trop proches de la sortie.",
               minimum=0, maximum=365),
     ParamSpec("delta_min", "Delta absolu min de la jambe vendue", "filters", "float",
-              "Plage indicative : le delta n'est pas une probabilité de gain.",
+              "Plus il est bas, plus le strike est loin du cours : moins de prime, moins de "
+              "risque. Conseillé : 0,10.",
               minimum=0.01, maximum=0.9, step=0.01),
     ParamSpec("delta_max", "Delta absolu max de la jambe vendue", "filters", "float",
-              minimum=0.01, maximum=0.9, step=0.01),
+              "Conseillé : 0,20 (environ 20 % de chances d'être dans la monnaie à "
+              "l'échéance, à titre indicatif).", minimum=0.01, maximum=0.9, step=0.01),
     ParamSpec("use_iv_rank_filter", "Filtre IV Rank", "filters", "bool",
               "Volatilité implicite élevée par rapport à son année passée."),
     ParamSpec("min_iv_rank", "IV Rank min", "filters", "float", toggle="use_iv_rank_filter",
@@ -397,7 +402,8 @@ PARAM_SPECS: tuple[ParamSpec, ...] = (
               minimum=0, maximum=10, step=0.05),
     ParamSpec("max_trade_risk_pct", "Risque max d'un trade", "risk", "pct",
               "Perte max d'un spread, perte en stress d'une put vendue. Contrats = arrondi "
-              "inférieur (budget / risque d'un contrat).", minimum=0.001, maximum=0.2, step=0.001),
+              "inférieur (budget / risque d'un contrat). Conseillé : 1 %.", minimum=0.001,
+              maximum=0.2, step=0.001),
     ParamSpec("use_exceptional_risk", "Seuil exceptionnel", "risk", "bool",
               "Budget plus large pour un deal au score très élevé."),
     ParamSpec("exceptional_trade_risk_pct", "Risque max d'un deal exceptionnel", "risk", "pct",
@@ -447,14 +453,18 @@ PARAM_SPECS: tuple[ParamSpec, ...] = (
               maximum=1, step=0.01),
     ParamSpec("use_take_profit", "Objectif de gain", "exits", "bool"),
     ParamSpec("take_profit_pct", "Part du crédit encaissée", "exits", "pct",
+              "Rachat quand ce pourcentage de la prime est gagné. Conseillé : 50 %.",
               toggle="use_take_profit", minimum=0.05, maximum=1, step=0.05),
     ParamSpec("use_stop_loss", "Stop (hors covered calls)", "exits", "bool"),
     ParamSpec("stop_loss_multiple", "Rachat à x fois le crédit", "exits", "float",
-              toggle="use_stop_loss", minimum=1.1, maximum=20, step=0.1),
+              "2 : l'option vendue 1 $ est rachetée à 2 $, soit une perte d'environ 1 fois "
+              "la prime. Conseillé : 2.", toggle="use_stop_loss", minimum=1.1, maximum=20,
+              step=0.1),
     ParamSpec("use_time_exit", "Sortie avant l'échéance", "exits", "bool",
               "Sans elle, la position va à l'échéance."),
-    ParamSpec("exit_dte", "Sortie à DTE", "exits", "int", toggle="use_time_exit", minimum=0,
-              maximum=180),
+    ParamSpec("exit_dte", "Sortie à DTE", "exits", "int",
+              "Rachat quand il reste ce nombre de jours avant l'échéance. Conseillé : 21.",
+              toggle="use_time_exit", minimum=0, maximum=180),
     ParamSpec("stop_confirmations", "Relevés consécutifs pour confirmer le stop", "stops", "int",
               "Le stop de coût compare le prix de rachat attendu (pas le mid seul) au seuil, "
               "sur ce nombre de relevés de 5 minutes.", toggle="use_stop_loss", minimum=1,
@@ -506,6 +516,33 @@ PARAM_SPECS: tuple[ParamSpec, ...] = (
     ParamSpec("min_quality_score", "Score min sur chaque note", "score", "float",
               "Sous ce seuil (qualité absolue, exécution ou portefeuille) : NO TRADE.",
               minimum=0, maximum=1, step=0.05),
+)  # fmt: skip
+
+
+# Simple view of the settings page: the few settings that decide most of the behaviour, by
+# question. Every other field stays in the advanced section.
+SIMPLE_GROUPS: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
+    ("what", "Quoi trader", "Les stratégies actives et leurs titres.",
+     ("enable_etfs", "etfs", "enable_wheel", "wheel", "enable_true_wheel", "true_wheel")),
+    ("risk", "Combien risquer", "La taille de chaque position et le total en jeu.",
+     ("max_trade_risk_pct", "max_open_risk_pct", "max_drawdown_pct")),
+    ("entry", "Quand entrer", "Quelles options vendre : échéance et distance au cours.",
+     ("dte_min", "dte_max", "delta_min", "delta_max")),
+    ("exit", "Quand sortir", "Les trois sorties automatiques.",
+     ("use_take_profit", "take_profit_pct", "use_stop_loss", "stop_loss_multiple",
+      "use_time_exit", "exit_dte")),
+)  # fmt: skip
+
+# Risk levels of the simple view: only the total open loss changes, the per-trade risk
+# (1 %) and the cluster limits stay. "Élevé" is the value of the "Short Put Income 40 %"
+# profile (parameter search of 2026-10-06).
+RISK_LEVELS: tuple[tuple[str, str, str, dict[str, float]], ...] = (
+    ("prudent", "Prudent", "Jusqu'à 10 % du capital en perte maximale ouverte (défaut).",
+     {"max_trade_risk_pct": 0.01, "max_open_risk_pct": 0.10}),
+    ("intermediaire", "Intermédiaire", "Jusqu'à 20 % du capital en perte maximale ouverte.",
+     {"max_trade_risk_pct": 0.01, "max_open_risk_pct": 0.20}),
+    ("eleve", "Élevé", "Jusqu'à 40 % du capital en perte maximale ouverte (profil Short Put "
+     "Income 40 %, backtesté).", {"max_trade_risk_pct": 0.01, "max_open_risk_pct": 0.40}),
 )  # fmt: skip
 
 

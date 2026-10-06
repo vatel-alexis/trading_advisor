@@ -6,7 +6,14 @@ from datetime import timedelta
 import pytest
 
 from app.domain.exits import PROFIT_TARGET, STOP_LOSS, TIME_EXIT, ShortPremium, evaluate_exit
-from app.domain.params import PARAM_SPECS, InvalidParams, StrategyParams, parse_params
+from app.domain.params import (
+    PARAM_SPECS,
+    RISK_LEVELS,
+    SIMPLE_GROUPS,
+    InvalidParams,
+    StrategyParams,
+    parse_params,
+)
 from app.domain.risk import AccountState, Exposure
 from app.domain.screener import screen, trend_ok
 from tests.chains import TODAY, make_snapshot
@@ -23,6 +30,19 @@ def test_every_field_has_a_spec_and_every_toggle_exists() -> None:
     assert names - specs == {"iv_rank_min_history", "risk_free_rate"}
     assert all(s.toggle in names for s in PARAM_SPECS if s.toggle)
     assert PARAMS.errors() == []
+
+
+def test_simple_view_and_risk_levels_are_valid() -> None:
+    specs = {s.key: s for s in PARAM_SPECS}
+    keys = [k for *_, group in SIMPLE_GROUPS for k in group]
+    assert len(keys) == len(set(keys)) and set(keys) <= set(specs)
+    # A field's switch is shown next to it in the simple view.
+    assert all(specs[k].toggle in (None, *keys) for k in keys)
+    for _, _, _, values in RISK_LEVELS:
+        assert set(values) <= set(specs)
+        assert parse_params(values).errors() == []
+    # The first level is the defaults.
+    assert all(getattr(PARAMS, k) == v for k, v in RISK_LEVELS[0][3].items())
 
 
 def test_new_indicators_start_off_and_old_filters_on() -> None:
