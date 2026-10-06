@@ -77,9 +77,15 @@ export function OpportunityCard({ deal }: { deal: Opportunity }) {
               : `${pct(deal.distance_pct)}${deal.distance_sd == null ? "" : ` · ${deal.distance_sd.toFixed(1)} σ`}`
           }
         />
-        <Row label="Détention prévue" value={deal.holding_window == null ? "donnée absente" : `${deal.holding_window} j`} />
+        <Row
+          label="Détention prévue"
+          value={deal.holding_window == null ? "donnée absente" : `${deal.holding_window} j`}
+        />
         <Row label="Gain max" value={usd(deal.max_gain)} />
-        <Row label="Rendement / risque" value={deal.return_on_risk == null ? pct(deal.ror) : pct(deal.return_on_risk)} />
+        <Row
+          label="Rendement / risque"
+          value={deal.return_on_risk == null ? pct(deal.ror) : pct(deal.return_on_risk)}
+        />
         <Row label="AROC (informatif)" value={pct(deal.aroc)} />
         <Row label="Crédit" value={`${price(deal.credit)} × ${deal.quantity}`} />
         <Row label="Prime totale" value={usd(deal.credit_total)} />
@@ -89,9 +95,17 @@ export function OpportunityCard({ deal }: { deal: Opportunity }) {
         <Row label="Perte max" value={usd(deal.max_loss)} />
         <Row label="Stress loss" value={usd(deal.stress_loss)} />
         <Row label="Cluster" value={deal.cluster ?? "—"} />
-        <Row label="Point mort" value={price(deal.breakeven)} />
+        <Row label="Seuil de rentabilité" value={price(deal.breakeven)} />
         <Row label="IV Rank" value={deal.iv_rank == null ? "—" : deal.iv_rank.toFixed(0)} />
       </dl>
+      {deal.quality ? (
+        <div className="mt-3 space-y-1.5 text-xs">
+          <QualityBadges quality={deal.quality} />
+          {deal.quality.weaknesses.length ? (
+            <p className="text-warning">Points faibles : {deal.quality.weaknesses.join(", ")}.</p>
+          ) : null}
+        </div>
+      ) : null}
       {deal.quality ? <QualityDetails quality={deal.quality} /> : null}
       {deal.impact ? <ImpactDetails impact={deal.impact} /> : null}
       {deal.sizing ? <SizingDetails sizing={deal.sizing} /> : null}
@@ -100,11 +114,13 @@ export function OpportunityCard({ deal }: { deal: Opportunity }) {
         {deal.stop_price != null ? `, stop à ${price(deal.stop_price)}` : ", pas de stop"}
         {deal.time_exit_date ? `, sortie le ${day(deal.time_exit_date)}` : ""}.
         {deal.next_earnings ? ` Résultats le ${day(deal.next_earnings)}.` : ""}
-        {deal.assignment_accepted ? " Assignation acceptée : les actions sont gardées puis couvertes par des calls." : ""}
+        {deal.assignment_accepted
+          ? " Assignation acceptée : les actions sont gardées puis couvertes par des calls."
+          : ""}
         {deal.stop_price != null
           ? " Le stop envoie un ordre limite : il ne garantit pas le prix de rachat (gap, écart bid/ask)."
-          : ""}
-        {" "}Delta et PoP sont des estimations du modèle, pas des probabilités de gain garanties.
+          : ""}{" "}
+        Delta et PoP sont des estimations du modèle, pas des probabilités de gain garanties.
       </p>
 
       <div className="mt-auto pt-4">
@@ -256,6 +272,12 @@ export function QualityBadges({ quality }: { quality: Quality }) {
       <span className="rounded-full border border-line px-2 py-0.5">Qualité {score(quality.absolute)}</span>
       <span className="rounded-full border border-line px-2 py-0.5">Exécution {score(quality.execution)}</span>
       <span className="rounded-full border border-line px-2 py-0.5">Portefeuille {score(quality.portfolio)}</span>
+      <span
+        className={`rounded-full border px-2 py-0.5 ${quality.missing.length ? "border-warning/60" : "border-line"}`}
+      >
+        Données {score(quality.components.data)}
+        {quality.missing.length ? ` (${quality.missing.length} absente${quality.missing.length > 1 ? "s" : ""})` : ""}
+      </span>
       {quality.rank ? (
         <span className="rounded-full border border-line px-2 py-0.5">
           Rang {quality.rank}/{quality.rank_of}
@@ -271,7 +293,6 @@ function QualityDetails({ quality }: { quality: Quality }) {
     <details className="mt-3 text-xs" open={!quality.eligible}>
       <summary className="cursor-pointer text-accent">Pourquoi ce deal ?</summary>
       <div className="mt-2 space-y-2">
-        <QualityBadges quality={quality} />
         <p className="opacity-80">
           Score final {score(quality.final)} : la plus basse des trois notes, pour qu&apos;un bon rendement ne cache ni
           un marché peu liquide ni un portefeuille déjà chargé.
@@ -280,11 +301,12 @@ function QualityDetails({ quality }: { quality: Quality }) {
           {Object.entries(quality.components).map(([key, value]) => (
             <li key={key} className="flex justify-between gap-2">
               <span className="opacity-70">{COMPONENT_LABEL[key] ?? key}</span>
-              <span className={`tabular-nums ${value != null && value < 0.5 ? "text-warning" : ""}`}>{score(value)}</span>
+              <span className={`tabular-nums ${value != null && value < 0.5 ? "text-warning" : ""}`}>
+                {score(value)}
+              </span>
             </li>
           ))}
         </ul>
-        {quality.weaknesses.length ? <p>Points faibles : {quality.weaknesses.join(", ")}.</p> : null}
         {quality.missing.length ? <p className="opacity-80">Donnée absente : {quality.missing.join(", ")}.</p> : null}
         {quality.blocking.length ? (
           <ul className="text-danger">
