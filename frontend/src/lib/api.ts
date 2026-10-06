@@ -339,7 +339,13 @@ export type Profiles = {
   groups: { key: string; label: string }[];
   fields: ParamField[];
   defaults: Params;
+  // Simple view: the few settings shown first, by question; the rest is "advanced".
+  simple_groups: SimpleGroup[];
+  risk_levels: RiskLevel[];
 };
+
+export type SimpleGroup = { key: string; label: string; description: string; fields: string[] };
+export type RiskLevel = { key: string; label: string; description: string; values: Record<string, number> };
 
 export type BacktestSummary = {
   start: string;
