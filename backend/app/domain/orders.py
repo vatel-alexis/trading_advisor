@@ -33,6 +33,8 @@ class OrderRequest:
 class Quote:
     bid: float
     ask: float
+    # Broker greeks when published (signed: negative for a put).
+    delta: float | None = None
 
     @property
     def mid(self) -> float:
@@ -46,6 +48,16 @@ def price_up(value: float) -> float:
 
 def price(value: float) -> float:
     return max(0.01, round(value, 2))
+
+
+def progressive_limit(mid: float, natural: float, step: int, steps: int) -> float:
+    """Limit of the `step`-th try: the mid at step 0, the natural price from `steps` on.
+
+    Works for a credit (natural below the mid) and for a debit (natural above it).
+    """
+    if steps <= 0 or step >= steps:
+        return natural
+    return mid + (natural - mid) * max(step, 0) / steps
 
 
 def open_order(

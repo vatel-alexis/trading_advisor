@@ -101,6 +101,9 @@ export function OpportunityCard({ deal }: { deal: Opportunity }) {
         {deal.time_exit_date ? `, sortie le ${day(deal.time_exit_date)}` : ""}.
         {deal.next_earnings ? ` Résultats le ${day(deal.next_earnings)}.` : ""}
         {deal.assignment_accepted ? " Assignation acceptée : les actions sont gardées puis couvertes par des calls." : ""}
+        {deal.stop_price != null
+          ? " Le stop envoie un ordre limite : il ne garantit pas le prix de rachat (gap, écart bid/ask)."
+          : ""}
         {" "}Delta et PoP sont des estimations du modèle, pas des probabilités de gain garanties.
       </p>
 

@@ -18,7 +18,15 @@ from sqlalchemy.orm import Session
 
 from app.broker import ASSIGNMENT, EXPIRATION, Activity, Broker, BrokerError, BrokerOrder
 from app.domain import exits
-from app.domain.exits import ShortPremium, evaluate_exit, take_profit_price
+from app.domain.exits import (
+    TRIGGER_LABELS,
+    ExitSignal,
+    MarketView,
+    ShortPremium,
+    evaluate_exit,
+    stop_reached,
+    take_profit_price,
+)
 from app.domain.orders import (
     OrderRequest,
     Quote,
@@ -26,7 +34,9 @@ from app.domain.orders import (
     cost_to_close,
     net_credit,
     open_order,
+    price,
     price_up,
+    progressive_limit,
     realized_pnl,
 )
 from app.domain.params import StrategyParams
@@ -58,6 +68,7 @@ from app.models.enums import (
 from app.services.safety import (
     MONITOR,
     entry_gate,
+    losses,
     open_exposures,
     realized_capital,
     record_equity,
@@ -80,8 +91,9 @@ EXIT_REASON = {
     OrderPurpose.TIME_EXIT: ExitReason.TIME_EXIT,
     OrderPurpose.MANUAL_CLOSE: ExitReason.MANUAL,
 }
-# A stop or time exit that has not filled after this long is re-priced at the new natural.
-EXIT_REPRICE_AFTER = timedelta(minutes=15)
+# A stop or time exit re-priced within this many re-pricing intervals continues its steps
+# toward the natural price; after a longer pause it starts again one step past the mid.
+EXIT_STEP_MEMORY = 3
 
 
 class DecisionError(Exception):
@@ -114,7 +126,28 @@ def _contracts(position: Position) -> int:
     return _option_legs(position)[0].quantity
 
 
-def _params(session: Session, position: Position) -> StrategyParams:
+def _short_leg(position: Position) -> PositionLeg | None:
+    return next((leg for leg in _option_legs(position) if leg.side == Side.SELL), None)
+
+
+def opening_quotes(
+    legs: Sequence[tuple[str, str]], quotes: dict[str, Quote]
+) -> tuple[float, float, float] | None:
+    """Net credit per share of selling the position: (mid, natural, far); None if a leg has no
+    usable quote. The natural sells at the bids and buys at the asks."""
+    mid = natural = far = 0.0
+    for symbol, side in legs:
+        quote = quotes.get(symbol)
+        if quote is None or quote.ask <= 0:
+            return None
+        sign = 1 if side == Side.SELL else -1
+        mid += sign * quote.mid
+        natural += quote.bid if sign > 0 else -quote.ask
+        far += quote.ask if sign > 0 else -quote.bid
+    return mid, natural, far
+
+
+def position_params(session: Session, position: Position) -> StrategyParams:
     config = None
     if position.opportunity_id is not None:
         opportunity = session.get(Opportunity, position.opportunity_id)
@@ -171,7 +204,7 @@ def accept_opportunity(
 
     opportunity = _proposed(session, opportunity_id)
     quantity = opportunity.legs[0].quantity
-    _check_entry(session, broker, opportunity, starting_capital)
+    fresh = _check_entry(session, broker, opportunity, starting_capital)
     parent_id = None
     if opportunity.strategy_type == StrategyType.COVERED_CALL:
         lot = next(
@@ -221,15 +254,21 @@ def accept_opportunity(
     session.add(position)
     session.flush()
 
-    # Net natural and far quotes of the strategy at screening time, to measure fill quality.
-    short_bid = sum(float(leg.bid) for leg in opportunity.legs if leg.side == Side.SELL)
-    short_ask = sum(float(leg.ask) for leg in opportunity.legs if leg.side == Side.SELL)
-    long_bid = sum(float(leg.bid) for leg in opportunity.legs if leg.side == Side.BUY)
-    long_ask = sum(float(leg.ask) for leg in opportunity.legs if leg.side == Side.BUY)
+    # Net quotes of the strategy at acceptance (at screening if none came back), to measure
+    # the fill against the mid and the natural price.
+    if fresh is None:
+        legs = [(leg.option_symbol, leg.side.value) for leg in opportunity.legs]
+        fresh = opening_quotes(
+            legs,
+            {leg.option_symbol: Quote(float(leg.bid), float(leg.ask)) for leg in opportunity.legs},
+        )
+    mid, natural, far = fresh if fresh is not None else (float(opportunity.credit),) * 3
+    position.entry_mid = _dec(mid)
+    position.entry_natural = _dec(natural)
+    # Progressive limit from the screened mid; a price set by hand is never moved.
     credit = limit_price if limit_price is not None else float(opportunity.credit)
-    order = _new_order(
-        position, OrderPurpose.OPEN, credit, "day", short_bid - long_ask, short_ask - long_bid
-    )
+    order = _new_order(position, OrderPurpose.OPEN, credit, "day", natural, far)
+    order.reprice_step = None if limit_price is not None else 0
     session.commit()
     submit_order(session, broker, order)
     session.commit()
@@ -238,8 +277,11 @@ def accept_opportunity(
 
 def _check_entry(
     session: Session, broker: Broker, opportunity: Opportunity, starting_capital: float
-) -> None:
-    """Raise a DecisionError listing every reason the entry cannot be sent now."""
+) -> tuple[float, float, float] | None:
+    """Raise a DecisionError listing every reason the entry cannot be sent now.
+
+    Returns the fresh net credit quotes (mid, natural, far) of the deal.
+    """
     params = StrategyParams.from_dict(active_config(session).params)
     covered_call = opportunity.strategy_type == StrategyType.COVERED_CALL
     market_open, broker_error, quotes = None, None, {}
@@ -259,15 +301,15 @@ def _check_entry(
     )
     reasons = list(gate.reasons)
 
+    fresh = None
     if broker_error is None:
         missing = [s for s in symbols if s not in quotes or quotes[s].ask <= 0]
         if missing:
             reasons.append(f"Donnée absente : pas de cotation pour {', '.join(missing)}")
         else:
             legs = [(leg.option_symbol, leg.side.value) for leg in opportunity.legs]
-            mid = sum(
-                quotes[sym].mid if side == Side.SELL else -quotes[sym].mid for sym, side in legs
-            )
+            fresh = opening_quotes(legs, quotes)
+            mid = fresh[0]
             proposed = float(opportunity.credit)
             if mid < proposed * (1 - params.max_credit_drift_pct):
                 reasons.append(
@@ -296,6 +338,7 @@ def _check_entry(
 
     if reasons:
         raise DecisionError("Entrée bloquée : " + " ; ".join(reasons) + ".")
+    return fresh
 
 
 def reject_opportunity(
@@ -415,7 +458,8 @@ def apply_broker_order(session: Session, broker: Broker, order: Order, result: B
     if order.purpose == OrderPurpose.OPEN:
         if result.filled_quantity > 0:
             _opened(session, broker, order, result)
-        elif position.status == PositionStatus.PENDING:
+        elif position.status == PositionStatus.PENDING and not order.replaced:
+            # A step of the progressive limit is canceled to be sent again: still pending.
             _never_opened(position)
     elif result.filled_quantity > 0 and position.status == PositionStatus.OPEN:
         _closed(session, broker, order, result)
@@ -453,7 +497,7 @@ def _opened(session: Session, broker: Broker, order: Order, result: BrokerOrder)
     position.opened_at = result.filled_at or _now()
     _event(position, PositionEventType.OPENED, credit=round(credit, 4), contracts=filled)
 
-    params = _params(session, position)
+    params = position_params(session, position)
     if not params.use_take_profit:
         return
     target = take_profit_price(credit, params)
@@ -545,11 +589,52 @@ def sync_orders(session: Session, broker: Broker) -> None:
 # --- automatic exits ------------------------------------------------------------------------
 
 
-def check_exits(session: Session, broker: Broker, today: date) -> None:
+def _confirmations(
+    session: Session, position: Position, credit: float, params: StrategyParams
+) -> int:
+    """Consecutive latest marks (the one just added included) whose buy-back reached the stop."""
+    rows = session.scalars(
+        select(PositionMark)
+        .where(PositionMark.position_id == position.id)
+        .order_by(PositionMark.marked_at.desc(), PositionMark.id.desc())
+        .limit(max(params.stop_confirmations, 1))
+    ).all()
+    count = 0
+    for row in rows:
+        natural = float(row.natural) if row.natural is not None else None
+        if not stop_reached(float(row.mark), natural, credit, params):
+            break
+        count += 1
+    return count
+
+
+def _next_event(session: Session, underlying: str) -> date | None:
+    """Next earnings date of the underlying, from its latest screening (None when unknown)."""
+    return session.scalar(
+        select(Opportunity.next_earnings)
+        .where(Opportunity.underlying == underlying)
+        .order_by(Opportunity.id.desc())
+        .limit(1)
+    )
+
+
+def _drawdown_reached(session: Session, starting_capital: float | None, today: date) -> bool:
+    if starting_capital is None:
+        return False
+    params = StrategyParams.from_dict(active_config(session).params)
+    return losses(session, starting_capital, today).drawdown >= params.max_drawdown_pct
+
+
+def check_exits(
+    session: Session, broker: Broker, today: date, starting_capital: float | None = None
+) -> None:
     """Mark every open option position and act on the exit rules.
 
     The profit target rests at the broker as a GTC order. A stop or a time exit cancels it
-    first (both filling would leave a naked long), then buys back at the natural price.
+    first (both filling would leave a naked long), then buys back with a progressive limit.
+    Each mark keeps the mid, the natural price and the underlying price. When the drawdown
+    limit is reached (needs `starting_capital`), the losing position with the largest loss
+    gets the portfolio stop signal on this pass.
     """
     positions = session.scalars(
         select(Position).where(
@@ -560,62 +645,140 @@ def check_exits(session: Session, broker: Broker, today: date) -> None:
         return
     symbols = [leg.symbol for p in positions for leg in _option_legs(p)]
     quotes = broker.option_quotes(symbols)
+    try:
+        spots = broker.stock_prices(sorted({p.underlying for p in positions}))
+    except BrokerError as exc:
+        logger.warning("underlying prices unavailable: %s", exc)
+        spots = {}
     now = _now()
+    marked = []
     for position in positions:
         legs = _leg_sides(position)
         mark = cost_to_close(legs, quotes)
         if mark is None or position.entry_credit is None:
             continue
+        natural = cost_to_close(legs, quotes, natural=True)
         credit = float(position.entry_credit)
-        contracts = _contracts(position)
+        short = _short_leg(position)
+        delta = quotes[short.symbol].delta if short is not None else None
+        spot = spots.get(position.underlying)
         session.add(
             PositionMark(
                 position_id=position.id,
                 marked_at=now,
                 mark=_dec(mark),
-                unrealized_pnl=_dec(realized_pnl(credit, mark, contracts), 2),
+                natural=None if natural is None else _dec(natural),
+                delta=None if delta is None else _dec(delta, 6),
+                underlying_price=None if spot is None else _dec(spot),
+                unrealized_pnl=_dec(realized_pnl(credit, mark, _contracts(position)), 2),
             )
         )
-        params = _params(session, position)
-        expiration = _option_legs(position)[0].expiration
+        params = position_params(session, position)
         # A True Wheel put (assignment accepted by the version it was opened with) is never
         # stopped or exited at 21 DTE; puts opened before the True Wheel existed keep both.
         accepted = position.strategy_type == StrategyType.CASH_SECURED_PUT and (
             params.assignment_accepted(position.underlying)
+        )
+        marked.append((position, params, accepted, mark, natural, delta, spot))
+    session.flush()
+
+    worst = None
+    if _drawdown_reached(session, starting_capital, today):
+        losing = [
+            (realized_pnl(float(p.entry_credit), mark, _contracts(p)), p.id)
+            for p, _, accepted, mark, *_ in marked
+            if not accepted
+            and p.strategy_type != StrategyType.COVERED_CALL
+            and mark > float(p.entry_credit)
+        ]
+        worst = min(losing)[1] if losing else None
+
+    for position, params, accepted, mark, natural, delta, spot in marked:
+        credit = float(position.entry_credit)
+        short = _short_leg(position)
+        expiration = _option_legs(position)[0].expiration
+        view = MarketView(
+            natural=natural,
+            confirmations=_confirmations(session, position, credit, params),
+            short_delta=delta,
+            spot=spot,
+            short_strike=float(short.strike) if short is not None and short.strike else None,
+            next_event=_next_event(session, position.underlying),
+            portfolio_breach=position.id == worst,
         )
         signal = evaluate_exit(
             ShortPremium(position.strategy_type.value, credit, expiration, accepted),
             mark,
             today,
             params,
+            view,
         )
-        if signal is None:
-            continue
         try:
-            _act_on_exit(session, broker, position, signal.reason, mark, quotes, params, now)
+            if signal is None:
+                if _between_steps(position) and not _live_orders(session, position):
+                    # A stop step canceled for re-pricing, and the price came back.
+                    _restore_target(session, broker, position)
+                continue
+            _act_on_exit(session, broker, position, signal, natural, params, now)
         except BrokerError as exc:
             logger.warning("exit of position %s failed: %s", position.id, exc)
+
+
+def _between_steps(position: Position) -> bool:
+    """True when the last order sent is a stop or time exit canceled to be re-priced."""
+    last = max(position.orders, key=lambda o: o.id or 0, default=None)
+    return (
+        last is not None
+        and last.purpose in (OrderPurpose.STOP_LOSS, OrderPurpose.TIME_EXIT)
+        and last.replaced
+    )
+
+
+def _exit_step(position: Position, params: StrategyParams, now: datetime) -> int:
+    """Step of the next stop or time exit order: one past the last re-priced one, if recent."""
+    exits_sent = [
+        o
+        for o in position.orders
+        if o.purpose in (OrderPurpose.STOP_LOSS, OrderPurpose.TIME_EXIT)
+        and o.reprice_step is not None
+    ]
+    last = max(exits_sent, key=lambda o: o.id or 0, default=None)
+    memory = timedelta(minutes=params.exit_reprice_minutes * EXIT_STEP_MEMORY)
+    if last is None or not last.replaced or last.submitted_at is None:
+        return 1
+    if now - last.submitted_at > memory:
+        return 1
+    return last.reprice_step + 1
 
 
 def _act_on_exit(
     session: Session,
     broker: Broker,
     position: Position,
-    reason: str,
-    mark: float,
-    quotes: dict[str, Quote],
+    signal: ExitSignal,
+    natural: float | None,
     params: StrategyParams,
     now: datetime,
 ) -> None:
-    legs = _leg_sides(position)
+    reason, mark = signal.reason, signal.mark
     credit = float(position.entry_credit or 0)
     live = _live_orders(session, position)
     working = [o for o in live if o.purpose != OrderPurpose.TAKE_PROFIT]
     if working:
-        stale = [o for o in working if o.submitted_at and now - o.submitted_at > EXIT_REPRICE_AFTER]
-        _cancel(session, broker, stale)  # re-priced on the next pass
-        return
+        after = timedelta(minutes=params.exit_reprice_minutes)
+        repriceable = (OrderPurpose.STOP_LOSS, OrderPurpose.TIME_EXIT)
+        if any(
+            o.purpose not in repriceable or not o.submitted_at or now - o.submitted_at < after
+            for o in working
+        ):
+            return  # a manual buy-back, or a step still within its interval
+        for order in working:
+            order.replaced = True
+        if not _cancel(session, broker, working) or position.status != PositionStatus.OPEN:
+            return  # still working, or filled meanwhile
+        live = _live_orders(session, position)  # sent again one step further below
     resting_target = [o for o in live if o.purpose == OrderPurpose.TAKE_PROFIT]
+    step = None
     if reason == exits.PROFIT_TARGET:
         if resting_target:
             return  # the GTC order is working
@@ -623,15 +786,114 @@ def _act_on_exit(
     else:
         if not _cancel(session, broker, resting_target) or position.status != PositionStatus.OPEN:
             return
-        natural = cost_to_close(legs, quotes, natural=True)
-        limit, time_in_force = price_up(natural if natural is not None else mark), "day"
-        kind = (
-            PositionEventType.STOP_TRIGGERED
-            if reason == exits.STOP_LOSS
-            else PositionEventType.TIME_EXIT_TRIGGERED
+        step = _exit_step(position, params, now)
+        target = (
+            mark if natural is None else progressive_limit(mark, natural, step, params.limit_steps)
         )
-        _event(position, kind, mark=round(mark, 4), limit=limit)
+        limit, time_in_force = price_up(target), "day"
+        payload: dict[str, Any] = {
+            "mark": round(mark, 4),
+            "natural": None if natural is None else round(natural, 4),
+            "limit": limit,
+            "step": step,
+        }
+        if step == 1:
+            position.exit_mid = _dec(mark)
+            position.exit_natural = None if natural is None else _dec(natural)
+            kind = (
+                PositionEventType.STOP_TRIGGERED
+                if reason == exits.STOP_LOSS
+                else PositionEventType.TIME_EXIT_TRIGGERED
+            )
+            if reason == exits.STOP_LOSS:
+                payload["triggers"] = list(signal.triggers)
+                payload["labels"] = [TRIGGER_LABELS[t] for t in signal.triggers]
+            _event(position, kind, **payload)
+        else:
+            _event(position, PositionEventType.ORDER_REPRICED, purpose=reason, **payload)
     order = _new_order(position, EXIT_PURPOSE[reason], limit, time_in_force)
+    order.reprice_step = step
+    session.flush()
+    submit_order(session, broker, order)
+
+
+# --- progressive entries ----------------------------------------------------------------------
+
+
+def reprice_entries(session: Session, broker: Broker, now: datetime | None = None) -> None:
+    """Move unfilled opening orders one step closer to the natural credit.
+
+    A step older than `entry_reprice_minutes` is canceled and sent again 1/`limit_steps` of
+    the way from the current mid to the current natural credit, never below the proposed
+    credit minus `max_credit_drift_pct`. A price set by hand is never moved; the last step
+    stays until the end of the day (day order).
+    """
+    now = now or _now()
+    pending = session.scalars(
+        select(Position).where(
+            Position.status == PositionStatus.PENDING, Position.strategy_type.is_not(None)
+        )
+    ).all()
+    if not pending:
+        return
+    quotes = broker.option_quotes([leg.symbol for p in pending for leg in _option_legs(p)])
+    for position in pending:
+        try:
+            _reprice_entry(session, broker, position, quotes, now)
+        except BrokerError as exc:
+            logger.warning("re-pricing of position %s failed: %s", position.id, exc)
+
+
+def _reprice_entry(
+    session: Session,
+    broker: Broker,
+    position: Position,
+    quotes: dict[str, Quote],
+    now: datetime,
+) -> None:
+    opens = [o for o in position.orders if o.purpose == OrderPurpose.OPEN]
+    last = max(opens, key=lambda o: o.id or 0, default=None)
+    if last is None or last.reprice_step is None:
+        return
+    params = position_params(session, position)
+    if last.status in LIVE:
+        after = timedelta(minutes=params.entry_reprice_minutes)
+        if last.submitted_at is None or now - last.submitted_at < after:
+            return
+        if last.reprice_step >= params.limit_steps:
+            return
+    elif last.status == OrderStatus.CANCELED and last.replaced:
+        # Canceled for a new step that was never sent: give up after the session.
+        if last.submitted_at is not None and now - last.submitted_at > timedelta(hours=8):
+            _never_opened(position)
+            return
+    else:
+        return
+    net = opening_quotes(_leg_sides(position), quotes)
+    if net is None:
+        return  # no fresh quote: the working step stays
+    mid, natural, far = net
+    step = last.reprice_step + 1
+    opportunity = session.get(Opportunity, position.opportunity_id)
+    floor = float(opportunity.credit) * (1 - params.max_credit_drift_pct)
+    limit = price(max(progressive_limit(mid, natural, step, params.limit_steps), floor))
+    if last.status in LIVE:
+        if limit >= float(last.limit_price):
+            return  # the working order already asks no more than the next step
+        last.replaced = True
+        if not _cancel(session, broker, [last]) or position.status != PositionStatus.PENDING:
+            return  # still working, or filled while being canceled
+    order = _new_order(position, OrderPurpose.OPEN, limit, "day", natural, far)
+    order.reprice_step = step
+    _event(
+        position,
+        PositionEventType.ORDER_REPRICED,
+        purpose="open",
+        step=step,
+        limit=limit,
+        mark=round(mid, 4),
+        natural=round(natural, 4),
+    )
     session.flush()
     submit_order(session, broker, order)
 
@@ -678,6 +940,8 @@ def close_position(
 
     order = _new_order(position, OrderPurpose.MANUAL_CLOSE, price_up(natural), "day")
     order.idempotency_key = key
+    position.exit_mid = _dec(cost_to_close(legs, quotes))
+    position.exit_natural = _dec(natural)
     # Net quote of the buy-back: the far side (short legs at the bid) and the natural.
     far = sum(quotes[sym].bid if side == Side.SELL else -quotes[sym].ask for sym, side in legs)
     order.quote_bid = _dec(max(far, 0.0))
@@ -694,7 +958,7 @@ def _restore_target(session: Session, broker: Broker, position: Position) -> Non
         return
     if any(o.purpose == OrderPurpose.TAKE_PROFIT for o in _live_orders(session, position)):
         return
-    params = _params(session, position)
+    params = position_params(session, position)
     if not params.use_take_profit:
         return
     target = take_profit_price(float(position.entry_credit), params)
@@ -790,7 +1054,7 @@ def _put_assigned(
         position.exit_debit = Decimal("0")
         position.realized_pnl = position.realized_pnl or Decimal("0")
         position.closed_at = _now()
-    params = _params(session, position)
+    params = position_params(session, position)
     cost = strike - credit
     lot = Position(
         parent_position_id=position.id,
@@ -883,7 +1147,8 @@ def monitor(
     def exits_step() -> None:
         state["market_open"] = broker.market_is_open()
         if state["market_open"]:
-            check_exits(session, broker, today)
+            reprice_entries(session, broker)
+            check_exits(session, broker, today, starting_capital)
 
     steps = [
         ("orders", lambda: sync_orders(session, broker)),

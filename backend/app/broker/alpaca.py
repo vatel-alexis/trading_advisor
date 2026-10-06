@@ -187,11 +187,31 @@ class AlpacaBroker:
                 for symbol, snap in (data.get("snapshots") or {}).items():
                     quote = snap.get("latestQuote") or {}
                     if quote.get("ap"):
-                        quotes[symbol] = Quote(float(quote.get("bp") or 0), float(quote["ap"]))
+                        delta = (snap.get("greeks") or {}).get("delta")
+                        quotes[symbol] = Quote(
+                            float(quote.get("bp") or 0),
+                            float(quote["ap"]),
+                            None if delta is None else float(delta),
+                        )
                 if not data.get("next_page_token"):
                     break
                 params["page_token"] = data["next_page_token"]
         return quotes
+
+    def stock_prices(self, symbols: Sequence[str]) -> dict[str, float]:
+        """Last trade per stock or ETF from the IEX feed (free with paper)."""
+        unique = list(dict.fromkeys(symbols))
+        if not unique:
+            return {}
+        params = {"symbols": ",".join(unique), "feed": "iex"}
+        data = self._call(
+            "GET", f"/v2/stocks/trades/latest?{urllib.parse.urlencode(params)}", base=DATA_URL
+        )
+        return {
+            symbol: float(trade["p"])
+            for symbol, trade in (data.get("trades") or {}).items()
+            if trade.get("p")
+        }
 
     def option_activities(self, since: date) -> list[Activity]:
         """Assignments, expirations and exercises since `since`, oldest first.

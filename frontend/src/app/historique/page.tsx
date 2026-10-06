@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import { ApiDown } from "@/components/Stat";
-import { getHistory, type HistoryKind } from "@/lib/api";
+import { getHistory, type HistoryKind, type HistoryRow } from "@/lib/api";
 import { REASON_LABEL, STRATEGY_LABEL, day, pnlClass, price, signed, strikes } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +17,15 @@ const KINDS: { value: HistoryKind; label: string }[] = [
 const KIND_LABEL = Object.fromEntries(KINDS.map((k) => [k.value, k.label])) as Record<HistoryKind, string>;
 
 type Search = Record<string, string | string[] | undefined>;
+
+// Fill against the mid, per share: positive when the fill gave up part of the mid.
+function Slippage({ r }: { r: HistoryRow }) {
+  if (r.entry_slippage == null && r.exit_slippage == null) return null;
+  const parts = [];
+  if (r.entry_slippage != null) parts.push(`entrée ${price(r.entry_slippage)}`);
+  if (r.exit_slippage != null) parts.push(`sortie ${price(r.exit_slippage)}`);
+  return <span className="tabular-nums">Glissement vs mid : {parts.join(" · ")}</span>;
+}
 
 const one = (value: string | string[] | undefined) => (Array.isArray(value) ? value[0] : value) ?? "";
 const many = (value: string | string[] | undefined) => (Array.isArray(value) ? value : value ? [value] : []);
@@ -133,6 +142,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
                   <span className="tabular-nums">
                     Qté {r.quantity} · crédit {price(r.credit)} · rachat {price(r.debit)}
                   </span>
+                  <Slippage r={r} />
                 </div>
                 {r.reason || r.note ? (
                   <div className="mt-2 text-xs">
@@ -172,7 +182,12 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
                     <td className="px-3 py-2 whitespace-nowrap">{day(r.expiration)}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{r.quantity}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{price(r.credit)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{price(r.debit)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      {price(r.debit)}
+                      <div className="text-xs opacity-60">
+                        <Slippage r={r} />
+                      </div>
+                    </td>
                     <td className={`px-3 py-2 text-right tabular-nums ${pnlClass(r.pnl)}`}>{signed(r.pnl)}</td>
                     <td className="px-3 py-2 text-xs">
                       {r.reason ? (REASON_LABEL[r.reason] ?? r.reason) : "—"}
