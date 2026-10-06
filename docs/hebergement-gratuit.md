@@ -85,7 +85,11 @@ c'est normal.
 Déployer et ouvrir l'adresse du site. Le navigateur demande un identifiant (n'importe lequel)
 et le mot de passe. Le site peut passer des ordres paper : ne pas partager ce mot de passe.
 
-Vercel redéploie l'API et le site à chaque fusion sur `main`.
+Vercel redéploie l'API et le site à chaque fusion sur `main`. Quand une fusion ajoute une
+migration, le workflow `Migrations` (`.github/workflows/migrate.yml`) l'applique aussitôt à la
+base Neon, sans attendre le passage suivant du worker. Sans elle, le nouveau code de l'API lit
+des colonnes absentes et le site affiche « API injoignable ». Pour la rejouer à la main :
+*Actions → Migrations → Run workflow*.
 
 ## Suivre
 
