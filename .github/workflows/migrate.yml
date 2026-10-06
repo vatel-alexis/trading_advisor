@@ -1,0 +1,49 @@
+name: Migrations
+
+# Vercel redeploys the API on every push to main, but the hosted database was only migrated by
+# the worker, whose scheduled runs GitHub often delays or skips for hours. In between, the new
+# API code read columns the database did not have yet and the dashboard showed "API
+# injoignable". This applies the migrations as soon as main changes them.
+on:
+  push:
+    branches: [main]
+    paths: ["backend/migrations/**"]
+  workflow_dispatch:
+
+# Shared with the worker, so a migration never runs alongside a tick.
+concurrency:
+  group: worker
+  cancel-in-progress: false
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - name: Hosted database configured?
+        id: configured
+        working-directory: .
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::notice::Secret DATABASE_URL absent : rien à migrer."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.configured.outputs.ok == 'true'
+        uses: actions/checkout@v4
+      - if: steps.configured.outputs.ok == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - if: steps.configured.outputs.ok == 'true'
+        run: pip install .
+      - if: steps.configured.outputs.ok == 'true'
+        run: alembic upgrade head
