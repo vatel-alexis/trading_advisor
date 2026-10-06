@@ -10,6 +10,7 @@ const NAV = [
   { href: "/historique", label: "Historique" },
   { href: "/reglages", label: "Réglages" },
   { href: "/backtests", label: "Backtests" },
+  { href: "/pea", label: "PEA" },
 ];
 
 // Main menu: one row on desktop, a second row that scrolls sideways on phones (as on the CV).
