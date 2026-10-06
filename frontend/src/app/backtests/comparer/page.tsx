@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { EquityLines, SERIES_COLORS } from "@/components/LabCharts";
+import { ROBUSTNESS_LABEL, factor, isEngine2, recoveryText } from "@/components/BacktestRobustness";
 import { ApiDown } from "@/components/Stat";
 import { getBacktest, getProfiles, type BacktestDetail, type BacktestSummary } from "@/lib/api";
 import { day, paramValue, pct, pnlClass, usd } from "@/lib/format";
@@ -16,13 +17,27 @@ const METRICS: {
   value: (s: BacktestSummary) => string;
   tone?: (s: BacktestSummary) => number | null;
 }[] = [
-  { label: "Rendement annualisé", value: (s) => pct(s.cagr), tone: (s) => s.cagr },
   { label: "Drawdown max", value: (s) => pct(s.max_drawdown) },
+  { label: "Profit factor", value: (s) => factor(s.profit_factor) },
+  { label: "Rendement net", value: (s) => pct(s.net_return), tone: (s) => s.net_return ?? null },
+  {
+    label: "Pire année",
+    value: (s) => (s.worst_year ? `${pct(s.worst_year.return)} (${s.worst_year.year})` : "—"),
+    tone: (s) => s.worst_year?.return ?? null,
+  },
+  { label: "Pertes consécutives", value: (s) => String(s.max_consecutive_losses ?? "—") },
+  { label: "Temps de récupération", value: (s) => recoveryText(s.recovery_days, s.recovered) },
+  { label: "Robustesse", value: (s) => (s.robustness ? ROBUSTNESS_LABEL[s.robustness.label] : "—") },
+  {
+    label: "Scénario pessimiste (net)",
+    value: (s) => pct(s.scenarios?.pessimiste?.net_return),
+    tone: (s) => s.scenarios?.pessimiste?.net_return ?? null,
+  },
+  { label: "Rendement annualisé", value: (s) => pct(s.cagr), tone: (s) => s.cagr },
   { label: "Sharpe", value: (s) => s.sharpe?.toFixed(2) ?? "—" },
   { label: "Valeur finale", value: (s) => usd(s.final) },
   { label: "Trades clôturés", value: (s) => String(s.trades) },
   { label: "Gagnants", value: (s) => pct(s.win_rate) },
-  { label: "Profit factor", value: (s) => s.profit_factor?.toFixed(2) ?? "—" },
   { label: "Gain moyen", value: (s) => usd(s.avg_win) },
   { label: "Perte moyenne", value: (s) => usd(s.avg_loss) },
   { label: "Durée moyenne", value: (s) => `${s.avg_days_held.toFixed(0)} j` },
@@ -34,7 +49,11 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
   const query = await searchParams;
   const ids = (Array.isArray(query.ids) ? query.ids : query.ids ? [query.ids] : []).slice(0, MAX_RUNS);
   const [profiles, ...fetched] = await Promise.all([getProfiles(), ...ids.map((id) => getBacktest(id))]);
-  const runs = fetched.filter((r): r is BacktestDetail => r != null && r.summary != null && r.result != null);
+  const finished = fetched.filter((r): r is BacktestDetail => r != null && r.summary != null && r.result != null);
+  // A run of the old engine (Wheel stopped at the assignment) is not compared with a complete one.
+  const current = finished.filter((r) => isEngine2(r.summary));
+  const runs = current.length ? current : finished;
+  const left = finished.filter((r) => !runs.includes(r));
 
   if (ids.length === 0 || runs.length === 0) {
     return (
@@ -66,12 +85,27 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
   return (
     <section className="space-y-6">
       <div>
-        <Link href="/backtests" className="text-xs text-accent underline decoration-accent/40 underline-offset-4 opacity-60">
+        <Link
+          href="/backtests"
+          className="text-xs text-accent underline decoration-accent/40 underline-offset-4 opacity-60"
+        >
           Tous les backtests
         </Link>
         <h1 className="font-display text-2xl font-extrabold tracking-tight md:text-3xl">Comparer des backtests</h1>
         {new Set(runs.map((r) => `${r.start}${r.summary!.end}${r.capital}`)).size > 1 ? (
           <p className="text-sm text-warning">Attention : les périodes ou les capitaux diffèrent.</p>
+        ) : null}
+        {left.length ? (
+          <p className="text-sm text-warning">
+            Écarté(s) : {left.map((r) => `n° ${r.id}`).join(", ")} (ancien moteur, Wheel incomplète, non comparable).
+            Relance-les pour les comparer.
+          </p>
+        ) : null}
+        {current.length === 0 ? (
+          <p className="text-sm text-warning">
+            Backtests de l&apos;ancien moteur : Wheel incomplète et pas de scénarios. Relance-les pour des chiffres
+            comparables.
+          </p>
         ) : null}
       </div>
 

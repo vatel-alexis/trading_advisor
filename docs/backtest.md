@@ -3,6 +3,10 @@
 Simulation jour par jour de la stratégie sur l'historique, pour valider les seuils avant de
 trader. Les chiffres détaillés sont dans [backtest-resultats.md](backtest-resultats.md).
 
+> **Moteur 2 (octobre 2026).** Les chiffres ci-dessous viennent de l'ancien moteur : Wheel
+> arrêtée à l'assignation, entrées au mid, pas de limites de pertes. Ils ne se comparent pas
+> aux backtests relancés depuis. Voir « Moteur 2 » plus bas.
+
 ## En bref
 
 - **Avec les paramètres actuels, la stratégie perd de l'argent** : 20 000 $ deviennent 3 883 $
@@ -70,6 +74,33 @@ utilisent le prix réellement coté ce jour-là (NVDA, AAPL, AMZN, GOOGL ont spl
 **Résultats d'entreprises** : calendrier Yahoo jusqu'à mi-2025, puis dates estimées tous
 les 91 jours.
 
+## Moteur 2
+
+Ce que chaque backtest calcule désormais (`ENGINE_VERSION = 2` dans le résumé) :
+
+- **Prix reconstitués, jamais présentés comme des cotations.** Chaque run affiche un niveau
+  de confiance des données (« moyenne » au mieux, « faible » si moins de 80 % des trades ont
+  une volatilité tirée de VIX/VXN) et la liste des filtres non testés faute d'historique
+  (open interest, volume, filtre d'écart, stop de liquidité).
+- **Trois scénarios d'exécution**, le réaliste affiché par défaut : optimiste (entrée au
+  mid), réaliste (entrée à mi-chemin du naturel, sorties au naturel), pessimiste
+  (glissements plus forts, écarts bid/ask x1,5). L'ancien défaut était l'entrée au mid.
+- **Indicateurs de risque en tête** : drawdown max, profit factor, rendement net, pire année,
+  pertes consécutives, temps de récupération, robustesse.
+- **Calibration et hors échantillon** (60 % / 40 % de la période) et **fenêtres glissantes**
+  de 12 mois décalées de 3 mois, sans réoptimisation. Robustesse : « robuste » si 75 % des
+  fenêtres sont positives et le hors échantillon aussi, « fragile » sous 50 % ou hors
+  échantillon négatif.
+- **Stress tests** sur les trades clôturés : glissement d'un demi-écart de plus, écarts
+  doublés, taux de réussite réduit de 5 et 10 points, pertes corrélées (toutes les positions
+  ouvertes au pire jour perdent leur perte maximale).
+- **True Wheel complète** : assignation à l'échéance, lot d'actions valorisé chaque jour,
+  covered calls vendues seulement sur des actions détenues, actions appelées, P&L total
+  (puts + calls + actions). Les signaux de stop du réel (coût confirmé, delta, strike
+  franchi, résultats, limite du portefeuille) et les limites de pertes quotidienne,
+  mensuelle et de drawdown bloquent les entrées comme en réel.
+- Les runs de l'ancien moteur sont signalés et écartés de la comparaison avec les nouveaux.
+
 ## Limites
 
 - Les primes sont un modèle, pas des prix observés : la volatilité implicite réelle peut
@@ -77,9 +108,9 @@ les 91 jours.
   « options plus chères / moins chères » donnent l'ordre de grandeur de cet effet.
 - Les filtres de liquidité (open interest, volume) ne sont pas simulés : toutes les options
   reconstruites sont supposées liquides, seule la fourchette est filtrée.
-- Les entrées au prix milieu sont supposées exécutées. Le scénario « entrée à mi-chemin du
-  naturel » montre le coût d'un remplissage moins favorable.
-- Pas de dividendes, pas d'assignation anticipée, pas de covered calls.
+- Les stress tests sont du premier ordre : mêmes entrées et mêmes sorties, seuls les coûts et
+  les résultats changent.
+- Pas de dividendes ni d'assignation anticipée.
 - L'univers est celui d'aujourd'hui (biais du survivant), et le secteur de chaque titre est
   son secteur actuel.
 - 2019-2026 contient deux krachs (2020, 2022) qui pèsent lourd ; la période est courte pour

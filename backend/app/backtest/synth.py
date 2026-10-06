@@ -39,12 +39,34 @@ class ModelConfig:
     half_spread_large_cap: float = 0.05
     half_spread_wheel: float = 0.06
     min_half_spread: float = 0.005
-    # Fills, as a fraction of the half spread paid away from the mid. Entries rest at the mid
-    # (the app's limit); stops and time exits buy back at the natural price; the profit
-    # target is a resting limit and fills at its price.
-    entry_slippage: float = 0.0
+    # Fills, as a fraction of the half spread paid away from the mid. The realistic default:
+    # entries start at the mid and step toward the natural (half of it paid on average);
+    # stops and time exits pay the whole half spread; the profit target is a resting limit
+    # and fills at its price. See EXECUTION_SCENARIOS for the optimistic and pessimistic ones.
+    entry_slippage: float = 0.5
     exit_slippage: float = 1.0
+    # Bid/ask spreads widened (stress) or narrowed against the calibrated ones.
+    spread_multiplier: float = 1.0
     rate: float = 0.04
+
+
+# Execution scenarios: (label, overrides of the fills and spreads). The realistic one is the
+# default model and the one shown first.
+REALISTIC = "realiste"
+EXECUTION_SCENARIOS: dict[str, tuple[str, dict[str, float]]] = {
+    "optimiste": (
+        "Optimiste : entrées au mid, sorties à mi-chemin du naturel",
+        {"entry_slippage": 0.0, "exit_slippage": 0.5, "spread_multiplier": 1.0},
+    ),
+    REALISTIC: (
+        "Réaliste : entrées à mi-chemin du naturel, stops et sorties au naturel",
+        {"entry_slippage": 0.5, "exit_slippage": 1.0, "spread_multiplier": 1.0},
+    ),
+    "pessimiste": (
+        "Pessimiste : entrées au naturel, sorties au-delà du naturel, écarts x1,5",
+        {"entry_slippage": 1.0, "exit_slippage": 1.5, "spread_multiplier": 1.5},
+    ),
+}
 
 
 def realized_vol(returns: list[float]) -> float:
@@ -121,7 +143,7 @@ def build_series(
                 atm.append(max(cfg.min_atm_iv, vol * premium))
             else:
                 atm.append(None)
-        series[symbol] = SymbolSeries(h, atm, is_etf, spreads[group])
+        series[symbol] = SymbolSeries(h, atm, is_etf, spreads[group] * cfg.spread_multiplier)
     return series
 
 
@@ -159,12 +181,31 @@ def put_mid(spot: float, strike: float, years: float, atm: float, skew: float, r
     return bs_put_price(spot, strike, years, put_iv(spot, strike, years, atm, skew), rate)
 
 
+def call_mid(spot: float, strike: float, years: float, atm: float, skew: float, rate: float):
+    """Call at the same skewed volatility as the put of its strike (put-call parity)."""
+    if years <= 0:
+        return max(0.0, spot - strike)
+    put = put_mid(spot, strike, years, atm, skew, rate)
+    return max(0.0, put + spot - strike * math.exp(-rate * years))
+
+
+def option_mid(
+    kind: str, spot: float, strike: float, years: float, atm: float, skew: float, rate: float
+) -> float:
+    if years <= 0:
+        return max(0.0, strike - spot) if kind == "put" else max(0.0, spot - strike)
+    if kind == "call":
+        return call_mid(spot, strike, years, atm, skew, rate)
+    return put_mid(spot, strike, years, atm, skew, rate)
+
+
 def half_spread(mid: float, pct: float, cfg: ModelConfig) -> float:
-    return max(cfg.min_half_spread, mid * pct)
+    return max(cfg.min_half_spread * cfg.spread_multiplier, mid * pct)
 
 
-def option_symbol(underlying: str, expiration: date, strike: float) -> str:
-    return f"{underlying}{expiration:%y%m%d}P{round(strike * 1000):08d}"
+def option_symbol(underlying: str, expiration: date, strike: float, kind: str = "put") -> str:
+    letter = "C" if kind == "call" else "P"
+    return f"{underlying}{expiration:%y%m%d}{letter}{round(strike * 1000):08d}"
 
 
 def snapshot(
@@ -176,8 +217,10 @@ def snapshot(
     monthly_only: bool,
     lowest_width: float,
     cfg: ModelConfig,
+    calls: bool = False,
 ) -> MarketSnapshot | None:
-    """The put chain the screener would have seen at day i's close."""
+    """The put chain the screener would have seen at day i's close, with the calls from the
+    money up to +30 % when `calls` (shares held: covered calls)."""
     atm = s.atm_iv[i]
     if atm is None or i < MIN_HISTORY_DAYS:
         return None
@@ -210,6 +253,26 @@ def snapshot(
                     )
                 )
             k -= step
+        if calls:
+            k = math.ceil(spot / step) * step
+            while k <= spot * 1.3:
+                mid = call_mid(spot, k, years, atm, skew, cfg.rate)
+                if mid >= 0.01:
+                    hs = half_spread(mid, s.half_spread_pct, cfg)
+                    quotes.append(
+                        OptionQuote(
+                            symbol=option_symbol(h.symbol, exp, k, "call"),
+                            option_type="call",
+                            expiration=exp,
+                            strike=round(k, 2),
+                            bid=round(max(0.0, mid - hs), 4),
+                            ask=round(mid + hs, 4),
+                            iv=put_iv(spot, k, years, atm, skew),
+                            open_interest=LIQUID,
+                            volume=LIQUID,
+                        )
+                    )
+                k += step
     scale = h.split_factors[i]
     closes = [c * scale for c in h.closes[max(0, i - 260) : i + 1]]
     return MarketSnapshot(h.symbol, spot, closes, quotes, s.next_earnings(day), sector)
