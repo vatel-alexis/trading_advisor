@@ -3,6 +3,7 @@ from datetime import timedelta
 
 import pytest
 
+from app.domain.market import PutCallRatio, put_call_ratio
 from app.domain.params import StrategyParams
 from app.domain.risk import AccountState
 from app.domain.screener import (
@@ -185,3 +186,36 @@ def test_strike_distance_is_given_three_ways() -> None:
     assert deal.distance_pct == pytest.approx((500 - strike) / 500)
     assert deal.distance_sd is not None and 0.5 < deal.distance_sd < 2
     assert deal.abs_delta == pytest.approx(abs(deal.short_delta))
+
+
+def test_put_call_ratio_counts_each_contract_once() -> None:
+    snap = make_snapshot("SPY", 500, 1, sector=None)
+    puts = [q for q in snap.options if q.option_type == "put"]
+    ratio = put_call_ratio([*snap.options, *puts])
+
+    assert ratio is not None
+    assert ratio.put_volume == sum(q.volume for q in puts)
+    assert ratio.call_volume == 0 and ratio.volume_ratio is None
+    assert put_call_ratio([]) is None
+
+
+def test_put_call_filter_is_off_by_default_and_blocks_heavy_put_volume() -> None:
+    heavy = PutCallRatio(put_volume=30_000, call_volume=10_000, put_oi=0, call_oi=0)
+    snap = replace(make_snapshot("SPY", 500, 1, sector=None), put_call=heavy)
+    on = replace(PARAMS, use_put_call_filter=True, max_put_call_ratio=2.5)
+
+    selected = screen([snap], TODAY, PARAMS, ACCOUNT).selected
+    assert [c.underlying for c in selected] == ["SPY"]
+    assert selected[0].put_call == heavy
+    blocked = screen([snap], TODAY, on, ACCOUNT)
+    assert blocked.ranked == [] and blocked.funnel["put_call"] == 0
+
+
+def test_put_call_filter_lets_through_what_it_cannot_judge() -> None:
+    on = replace(PARAMS, use_put_call_filter=True, max_put_call_ratio=2.5)
+    thin = PutCallRatio(put_volume=300, call_volume=100, put_oi=0, call_oi=0)
+    base = make_snapshot("SPY", 500, 1, sector=None)
+
+    # No data (backtest chains) or too little volume: the filter does not decide.
+    for snap in (base, replace(base, put_call=thin)):
+        assert [c.underlying for c in screen([snap], TODAY, on, ACCOUNT).selected] == ["SPY"]

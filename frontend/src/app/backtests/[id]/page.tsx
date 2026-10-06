@@ -38,6 +38,7 @@ const FUNNEL_LABEL: Record<string, string> = {
   iv_rank: "IV Rank",
   trend: "Tendance",
   iv_hv: "IV / HV",
+  put_call: "Ratio puts / calls",
   dte: "DTE",
   delta: "Delta",
   open_interest: "Open interest",

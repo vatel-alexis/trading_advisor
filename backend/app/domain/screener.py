@@ -12,7 +12,15 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 
-from app.domain.market import IvRank, MarketSnapshot, OptionQuote, atm_iv30, hv30, iv_rank
+from app.domain.market import (
+    IvRank,
+    MarketSnapshot,
+    OptionQuote,
+    PutCallRatio,
+    atm_iv30,
+    hv30,
+    iv_rank,
+)
 from app.domain.params import SHORT_PUT_GROUP, TRUE_WHEEL_GROUP, StrategyParams
 from app.domain.pricing import bs_delta, bs_theta, bs_vega, prob_above, spread_pct
 from app.domain.risk import (
@@ -42,6 +50,7 @@ FUNNEL_STAGES = (
     "iv_rank",
     "trend",
     "iv_hv",
+    "put_call",
     "dte",
     "holding",
     "delta",
@@ -99,6 +108,8 @@ class Candidate:
     quality: Quality | None = None
     # Shares' cost basis, for a covered call.
     cost_basis: float | None = None
+    # The underlying's put/call ratio (live chains only), for information and its filter.
+    put_call: PutCallRatio | None = None
 
     @property
     def short_leg(self) -> Leg:
@@ -166,6 +177,7 @@ class UnderlyingStats:
     iv_rank: IvRank | None
     # Close above its trend moving average; None when the history is too short.
     trend_up: bool | None = None
+    put_call: PutCallRatio | None = None
 
 
 @dataclass
@@ -261,6 +273,17 @@ def _iv_hv_ok(stats: "UnderlyingStats", p: StrategyParams) -> bool:
     return bool(stats.iv30 and stats.hv30) and stats.iv30 / stats.hv30 >= p.min_iv_hv_ratio
 
 
+def put_call_ok(stats: "UnderlyingStats", p: StrategyParams) -> bool:
+    """Volume put/call ratio at most the maximum. Too little volume, or no data (the backtest's
+    synthetic chains), lets the trade through: the filter cannot judge it."""
+    if not p.use_put_call_filter:
+        return True
+    pc = stats.put_call
+    if pc is None or pc.volume_ratio is None or pc.total_volume < p.min_put_call_volume:
+        return True
+    return pc.volume_ratio <= p.max_put_call_ratio
+
+
 def _put_trades(
     snap: MarketSnapshot,
     group: str,
@@ -287,6 +310,9 @@ def _put_trades(
     if not _iv_hv_ok(stats, p):
         return []
     funnel["iv_hv"] += len(puts)
+    if not put_call_ok(stats, p):
+        return []
+    funnel["put_call"] += len(puts)
 
     rows = [q for q in puts if p.dte_min <= (q.expiration - today).days <= p.dte_max]
     funnel["dte"] += len(rows)
@@ -370,6 +396,7 @@ def _put_trades(
                 hv30=stats.hv30,
                 next_earnings=snap.next_earnings,
                 holding_window=p.holding_window(dte, accepted),
+                put_call=stats.put_call,
             )
         )
     funnel["structure"] += len(trades)
@@ -457,6 +484,7 @@ def _covered_call(
                 holding_window=dte,
                 quantity=lot.shares // 100,
                 cost_basis=lot.cost_basis,
+                put_call=stats.put_call,
             )
         )
     for c in calls:
@@ -484,7 +512,7 @@ def underlying_stats(
     rank = iv_rank(iv30, iv_history, snap.closes, p.iv_rank_min_history) if iv30 else None
     n = p.trend_sma_days
     trend = snap.closes[-1] > sum(snap.closes[-n:]) / n if len(snap.closes) >= n else None
-    return UnderlyingStats(snap.spot, iv30, hv30(snap.closes), rank, trend)
+    return UnderlyingStats(snap.spot, iv30, hv30(snap.closes), rank, trend, snap.put_call)
 
 
 def screen(

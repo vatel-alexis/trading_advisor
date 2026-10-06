@@ -94,6 +94,15 @@ export type OpportunityLeg = {
   delta: number | null;
 };
 
+export type PutCall = {
+  volume_ratio: number | null;
+  oi_ratio: number | null;
+  put_volume: number;
+  call_volume: number;
+  put_oi: number;
+  call_oi: number;
+};
+
 export type Opportunity = {
   id: number;
   underlying: string;
@@ -123,6 +132,8 @@ export type Opportunity = {
   aroc: number;
   iv_rank: number | null;
   iv_rank_method: string | null;
+  // Put/call ratio of the underlying's chain on the day (older deals: missing).
+  put_call?: PutCall | null;
   score: number;
   next_earnings: string | null;
   take_profit_price: number | null;
