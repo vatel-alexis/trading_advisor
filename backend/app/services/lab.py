@@ -66,6 +66,15 @@ PRESETS: tuple[tuple[str, str, dict[str, Any]], ...] = (
         {"enable_etfs": False, "enable_wheel": False, "enable_true_wheel": False,
          "enable_large_caps": True},
     ),
+    (
+        "Short Put Income 40 %",
+        "Recherche de paramètres du 06/10/2026 : Short Put Income seul (spreads ETF déficitaires "
+        "dans toutes les variantes), delta 0.15-0.25, objectif de gain 75 %, perte maximale "
+        "ouverte 40 % (un choc de -30 % sur toutes les positions reste sous 10 % du capital). "
+        "Autres garde-fous inchangés. Voir docs/recherche-parametres.md.",
+        {"enable_etfs": False, "delta_min": 0.15, "delta_max": 0.25, "take_profit_pct": 0.75,
+         "max_open_risk_pct": 0.40},
+    ),
 )  # fmt: skip
 # Documented backtests of the presets, until a run of the profile exists.
 PRESET_REFERENCES: dict[str, dict[str, Any]] = {
@@ -85,6 +94,14 @@ PRESET_REFERENCES: dict[str, dict[str, Any]] = {
         "end": "2026-10-02",
         "source": "Backtest 2019-2026, grandes valeurs seules à 40-55 DTE "
         "(docs/backtest-resultats.md)",
+    },
+    "Short Put Income 40 %": {
+        "cagr": 0.046,
+        "max_drawdown": 0.047,
+        "profit_factor": 2.34,
+        "start": "2019-01-02",
+        "end": "2026-10-02",
+        "source": "Backtest 2019-2026, exécution réaliste (docs/recherche-parametres.md)",
     },
 }
 

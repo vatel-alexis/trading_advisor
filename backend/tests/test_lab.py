@@ -32,8 +32,13 @@ def test_first_use_makes_prudent_the_active_profile(session: Session) -> None:
     data = lab.list_profiles(session)
 
     names = [p["name"] for p in data["profiles"]]
-    assert names == ["Prudent", "Actuel", "Expérimental : grandes valeurs"]
-    prudent, actuel, experimental = data["profiles"]
+    assert names == [
+        "Prudent",
+        "Actuel",
+        "Expérimental : grandes valeurs",
+        "Short Put Income 40 %",
+    ]
+    prudent, actuel, experimental, short_put = data["profiles"]
     assert prudent["is_active"] and data["active_profile_id"] == prudent["id"]
     assert prudent["changed"] == []
     assert not actuel["is_active"]
@@ -46,9 +51,13 @@ def test_first_use_makes_prudent_the_active_profile(session: Session) -> None:
     # Large caps live in their own experimental profile, flagged by its backtest.
     assert not prudent["params"]["enable_large_caps"]
     assert experimental["params"]["enable_large_caps"] and experimental["risk"]["blocking"]
+    # The parameter search result is offered, not activated.
+    assert not short_put["is_active"] and not short_put["risk"]["blocking"]
+    assert not short_put["params"]["enable_etfs"]
+    assert short_put["params"]["max_open_risk_pct"] == 0.40
     assert {f["key"] for f in data["fields"]} >= {"use_trend_filter", "max_trade_risk_pct"}
     lab.list_profiles(session)  # idempotent
-    assert len(session.scalars(select(StrategyProfile)).all()) == 3
+    assert len(session.scalars(select(StrategyProfile)).all()) == 4
 
 
 def test_activating_a_loss_making_profile_needs_an_explicit_confirmation(
@@ -210,7 +219,7 @@ def test_api_profiles_and_backtests(session: Session) -> None:
     finally:
         app.dependency_overrides.clear()
 
-    assert len(listing["profiles"]) == 3
+    assert len(listing["profiles"]) == 4
     assert created.status_code == 200, created.text
     assert created.json()["params"]["dte_min"] == 45  # copied from Prudent
     assert created.json()["risk"]["status"] == "untested"
