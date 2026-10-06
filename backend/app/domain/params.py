@@ -82,6 +82,13 @@ class StrategyParams:
     # Volatility premium: IV30 / HV30 at least this ratio.
     use_iv_hv_filter: bool = False
     min_iv_hv_ratio: float = 1.0
+    # Put/call ratio on the day's volume of the underlying's chain at most this value. No
+    # history exists for it, so the backtest cannot measure it: informative only.
+    use_put_call_filter: bool = False
+    # Index ETFs carry the market's hedges: SPY, QQQ and IWM usually sit between 1 and 2.5.
+    max_put_call_ratio: float = 3.0
+    # Below this many contracts traded (puts + calls), the ratio is not used.
+    min_put_call_volume: int = 1000
 
     # Spread construction: long leg this many dollars below the short leg, first width in this
     # order whose max loss fits the risk budget of one trade.
@@ -376,6 +383,14 @@ PARAM_SPECS: tuple[ParamSpec, ...] = (
               "le filtre n'y est vraiment informatif que pour SPY et QQQ."),
     ParamSpec("min_iv_hv_ratio", "IV / HV min", "indicators", "float", toggle="use_iv_hv_filter",
               minimum=0, maximum=5, step=0.05),
+    ParamSpec("use_put_call_filter", "Filtre ratio puts / calls", "indicators", "bool",
+              "Écarte un sous-jacent dont le volume du jour va beaucoup plus aux puts qu'aux "
+              "calls. Aucun historique gratuit : non testé en backtest, le filtre est sans "
+              "effet sur les backtests et son intérêt pour la rentabilité n'est pas démontré."),
+    ParamSpec("max_put_call_ratio", "Ratio puts / calls max (volume)", "indicators", "float",
+              toggle="use_put_call_filter", minimum=0.1, maximum=10, step=0.05),
+    ParamSpec("min_put_call_volume", "Volume min pour utiliser le ratio (contrats)",
+              "indicators", "int", toggle="use_put_call_filter", minimum=0),
     ParamSpec("spread_widths", "Largeurs essayées ($, par ordre de préférence)", "structure",
               "floats"),
     ParamSpec("min_credit", "Crédit min d'un spread ($ par action)", "structure", "float",

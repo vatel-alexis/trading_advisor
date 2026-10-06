@@ -8,7 +8,7 @@ import urllib.parse
 import urllib.request
 from datetime import UTC, date, datetime
 
-from app.domain.market import MarketSnapshot, OptionQuote
+from app.domain.market import MarketSnapshot, OptionQuote, put_call_ratio
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -89,6 +89,13 @@ class YahooProvider:  # pragma: no cover - network
         chain = self.client.json(f"/v7/finance/options/{symbol}")["optionChain"]["result"][0]
         spot = float(chain["quote"].get("regularMarketPrice") or closes[-1])
         options: list[OptionQuote] = []
+        # The first answer already holds the nearest expiration, where most volume trades: it
+        # joins the screened expirations for the put/call ratio, at no extra request.
+        flow: list[OptionQuote] = []
+        for block in chain.get("options", [])[:1]:
+            first = datetime.fromtimestamp(block["expirationDate"], UTC).date()
+            flow += _quotes(block.get("puts", []), "put", first)
+            flow += _quotes(block.get("calls", []), "call", first)
         for ts in chain["expirationDates"]:
             expiration = datetime.fromtimestamp(ts, UTC).date()
             if not self.dte_min <= (expiration - today).days <= self.dte_max:
@@ -97,4 +104,6 @@ class YahooProvider:  # pragma: no cover - network
             block = data["optionChain"]["result"][0]["options"][0]
             options += _quotes(block.get("puts", []), "put", expiration)
             options += _quotes(block.get("calls", []), "call", expiration)
-        return MarketSnapshot(symbol, spot, closes, options, next_earnings, sector)
+        return MarketSnapshot(
+            symbol, spot, closes, options, next_earnings, sector, put_call_ratio(flow + options)
+        )

@@ -97,6 +97,14 @@ export function OpportunityCard({ deal }: { deal: Opportunity }) {
         <Row label="Cluster" value={deal.cluster ?? "—"} />
         <Row label="Seuil de rentabilité" value={price(deal.breakeven)} />
         <Row label="IV Rank" value={deal.iv_rank == null ? "—" : deal.iv_rank.toFixed(0)} />
+        <Row
+          label="Puts / calls (volume)"
+          value={putCallText(deal.put_call?.volume_ratio, deal.put_call?.put_volume, deal.put_call?.call_volume)}
+        />
+        <Row
+          label="Puts / calls (open interest)"
+          value={putCallText(deal.put_call?.oi_ratio, deal.put_call?.put_oi, deal.put_call?.call_oi)}
+        />
       </dl>
       {deal.quality ? (
         <div className="mt-3 space-y-1.5 text-xs">
@@ -229,6 +237,14 @@ const CAP_LABEL: Record<string, string> = {
 };
 
 // "Why this number of contracts?": floor(budget / risk of one contract), then every portfolio cap.
+const COMPACT = new Intl.NumberFormat("fr-FR", { notation: "compact", maximumFractionDigits: 1 });
+
+// Ratio of the underlying's whole chain, with the counts behind it: above 1, more puts.
+function putCallText(ratio: number | null | undefined, puts?: number, calls?: number) {
+  if (ratio == null || puts == null || calls == null) return "donnée absente";
+  return `${ratio.toFixed(2)} (${COMPACT.format(puts)} / ${COMPACT.format(calls)})`;
+}
+
 function SizingDetails({ sizing }: { sizing: NonNullable<Opportunity["sizing"]> }) {
   return (
     <details className="mt-2 text-xs">

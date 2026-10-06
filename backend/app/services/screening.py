@@ -180,6 +180,7 @@ def _opportunity(
         "hv30": c.hv30,
         "iv_rank_method": c.iv_rank.method if c.iv_rank else None,
         "iv_rank_days": c.iv_rank.days if c.iv_rank else None,
+        "put_call": c.put_call.to_dict() if c.put_call else None,
         "take_profit_price": (
             take_profit_price(c.credit, params) if params.use_take_profit else None
         ),

@@ -40,6 +40,67 @@ class MarketSnapshot:
     options: Sequence[OptionQuote]
     next_earnings: date | None = None
     sector: str | None = None
+    # Puts / calls traded and open on the whole chain; None when the source has no such data
+    # (the backtest's synthetic chains).
+    put_call: "PutCallRatio | None" = None
+
+
+@dataclass(frozen=True)
+class PutCallRatio:
+    """Put/call ratio of an underlying's option chain, on the day's volume and open interest.
+
+    Every option has a buyer and a seller, so the ratio does not tell how many traders are
+    short or long: it says whether today's activity went more to puts (hedging, bearish bets,
+    or put selling) or to calls. Above 1, more puts than calls.
+    """
+
+    put_volume: int
+    call_volume: int
+    put_oi: int
+    call_oi: int
+
+    @property
+    def volume_ratio(self) -> float | None:
+        return self.put_volume / self.call_volume if self.call_volume > 0 else None
+
+    @property
+    def oi_ratio(self) -> float | None:
+        # Yahoo often reports no open interest outside market hours: one side at 0 is missing
+        # data rather than a real ratio.
+        return self.put_oi / self.call_oi if self.put_oi > 0 and self.call_oi > 0 else None
+
+    @property
+    def total_volume(self) -> int:
+        return self.put_volume + self.call_volume
+
+    def to_dict(self) -> dict:
+        def r(x: float | None) -> float | None:
+            return None if x is None else round(x, 3)
+
+        return {
+            "volume_ratio": r(self.volume_ratio),
+            "oi_ratio": r(self.oi_ratio),
+            "put_volume": self.put_volume,
+            "call_volume": self.call_volume,
+            "put_oi": self.put_oi,
+            "call_oi": self.call_oi,
+        }
+
+
+def put_call_ratio(options: Sequence["OptionQuote"]) -> PutCallRatio | None:
+    """Totals over the quotes given (each contract once); None when nothing traded or is open."""
+    totals = {"put": [0, 0], "call": [0, 0]}
+    seen: set[str] = set()
+    for q in options:
+        if q.symbol in seen:
+            continue
+        seen.add(q.symbol)
+        totals[q.option_type][0] += max(0, q.volume)
+        totals[q.option_type][1] += max(0, q.open_interest)
+    ratio = PutCallRatio(totals["put"][0], totals["call"][0], totals["put"][1], totals["call"][1])
+    if ratio.total_volume == 0 and ratio.put_oi + ratio.call_oi == 0:
+        return None
+    return ratio
 
 
 @dataclass(frozen=True)

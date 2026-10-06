@@ -383,6 +383,8 @@ def _opportunity(o: Opportunity, capital: float) -> dict[str, Any]:
         "aroc": float(o.aroc),
         "iv_rank": _f(o.iv_rank),
         "iv_rank_method": metrics.get("iv_rank_method"),
+        # Put/call ratio of the underlying's chain (older deals and backtests: None).
+        "put_call": metrics.get("put_call"),
         "score": float(o.score),
         "next_earnings": _iso(o.next_earnings),
         "take_profit_price": target,
