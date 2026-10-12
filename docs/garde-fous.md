@@ -46,9 +46,10 @@ dépasse souvent le budget avec un choc de 30 % : c'est voulu.
 
 L'acceptation d'un deal est refusée, avec chaque raison, si l'un de ces points échoue :
 
-- le worker n'a rien exécuté avec succès depuis 60 min ;
-- le moniteur des positions n'a pas réussi de passage depuis 30 min, ou son dernier passage a
-  échoué ;
+- le worker n'a rien exécuté avec succès depuis 60 min (90 min au moins, le worker hébergé
+  passant une fois par heure) ;
+- le moniteur des positions n'a pas réussi de passage depuis 30 min (80 min au moins), ou son
+  dernier passage a échoué ;
 - aucun screener n'a terminé aujourd'hui (données obsolètes) ;
 - le courtier ne répond pas, ou le marché est fermé ;
 - une cotation manque pour une jambe, ou le crédit coté est plus de 25 % sous le crédit
@@ -123,7 +124,8 @@ Chaque candidat reçoit des notes séparées (0 à 1), stockées avec le deal :
 - Ordres limites progressifs (`limit_steps` = 3) : l'entrée part du mid puis se rapproche du
   naturel d'un tiers toutes les 10 minutes, sans descendre sous le crédit proposé moins 25 % ;
   un prix saisi à la main ne bouge pas. Stop et sortie à 21 DTE partent à un tiers du chemin
-  puis avancent toutes les 5 minutes jusqu'au naturel.
+  puis avancent à chaque passage du moniteur (une fois par heure sur le worker hébergé)
+  jusqu'au naturel.
 - Un stop envoie un ordre limite : il ne garantit pas le prix d'exécution (gap, écart qui
   s'élargit). La page Positions montre mid, naturel, écart de liquidation, prix de rachat
   attendu, glissement estimé et glissement observé ; l'historique montre le glissement de

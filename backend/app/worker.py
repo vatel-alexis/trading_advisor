@@ -9,7 +9,7 @@ Jobs are registered here as sprints land: daily screener (~10:30 ET), position m
     python -m app.worker monitor    # one monitor pass now
     python -m app.worker pea        # recompute the PEA ETF portfolio page now
     python -m app.worker tick       # what is due now + queued backtests (hosted cron)
-    python -m app.worker loop       # ticks for a few hours (hosted worker, see worker.yml)
+    python -m app.worker loop       # hourly ticks for a few hours (hosted worker, worker.yml)
 """
 
 import argparse
@@ -173,11 +173,16 @@ def tick() -> bool:
 
 
 def next_tick_delay(now: datetime) -> float:
-    """Seconds until the next tick: every 5 minutes while the monitor is due, else at the top
-    of the next hour (only queued backtests are left to run, and Neon can sleep in between)."""
-    if now.weekday() < 5 and 8 <= now.hour <= 17:
-        return 300.0
+    """Seconds until the next tick: at the top of each hour (monitor from 08:00 to 17:00 on
+    weekdays, queued backtests at any time), plus 10:30 for the daily screener.
+
+    Hourly rather than every 5 minutes, on Alexis's request (2026-10-12), to save Neon's free
+    compute; the entry gate's age limits allow for it (safety.MIN_MONITOR_AGE).
+    """
     top = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    screener = now.replace(hour=10, minute=30, second=0, microsecond=0)
+    if now.weekday() < 5 and now < screener < top:
+        top = screener
     return (top - now).total_seconds()
 
 
