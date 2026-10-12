@@ -308,6 +308,9 @@ export default async function Page({ searchParams }: { searchParams: Promise<Sea
             Score = moyenne des performances sur {report.assumptions.momentum_months.join(", ")} mois. Un ETF
             n&apos;est retenu que si son score est positif et son cours au-dessus de sa moyenne{" "}
             {report.assumptions.trend_months} mois.
+            {report.assumptions.min_uptrends
+              ? ` Si moins de ${report.assumptions.min_uptrends} ETF sont en hausse, la baisse est générale : toute la rotation passe en monétaire.`
+              : null}
           </p>
           <table className="w-full text-sm">
             <tbody>

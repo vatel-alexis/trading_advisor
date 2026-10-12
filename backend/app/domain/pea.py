@@ -1,9 +1,10 @@
 """PEA ETF portfolio: monthly trend-following rotation between PEA-eligible ETFs, in euros.
 
-Each month-end, every equity ETF gets a momentum score (mean of its 1, 3, 6 and 12-month
+Each month-end, every equity ETF gets a momentum score (mean of its 3, 6 and 12-month
 returns). A level keeps its `top` best ETFs; one of them is only held while its trend is up
 (score > 0 and price above its 10-month average), otherwise its share goes to the euro money
-market ETF. The new target is traded at the next day's close.
+market ETF. When fewer than MIN_UPTRENDS ETFs are in an uptrend, the whole rotation goes to the
+money market. The new target is traded at the next day's close.
 
 History: the PEA ETFs are recent (2016-2019), so each one is extended back with the US ETF on
 the same index converted to euros (monthly correlation 0.97-0.99 over the overlap, see
@@ -103,8 +104,13 @@ CASH_FEE = 0.25
 TRADING_DAYS = 252
 
 # Signal.
-MOMENTUM_MONTHS = (1, 3, 6, 12)
+# The last month alone mostly adds noise: 3, 6 and 12 months did better in both halves of the
+# backtest (docs/pea.md).
+MOMENTUM_MONTHS = (3, 6, 12)
 TREND_MONTHS = 10
+# "Canary": when fewer equity ETFs than this are in an uptrend, the fall is broad and the whole
+# rotation goes to the money market, even the ETFs still rising.
+MIN_UPTRENDS = 3
 # Brokerage and spread, per euro bought or sold (Boursorama ~0.5 % on sales, buys often free).
 COST = 0.003
 # A month-end also rebalances to the target when a line drifted this far from it.
@@ -235,10 +241,11 @@ def target(level: Level, ranked: Sequence[Score]) -> dict[str, float]:
     """Target weights of a level from the month's scores (keys with weight > 0 only)."""
     weights: dict[str, float] = {}
     usable = sorted((s for s in ranked if s.momentum is not None), key=lambda s: -s.momentum)
+    broad_fall = sum(s.trend_ok for s in usable) < MIN_UPTRENDS
     slot = level.rotation / level.top
     for i in range(level.top):
         pick = usable[i] if i < len(usable) else None
-        key = pick.key if pick and pick.trend_ok else CASH
+        key = pick.key if pick and pick.trend_ok and not broad_fall else CASH
         weights[key] = weights.get(key, 0.0) + slot
     for key, w in level.fixed.items():
         weights[key] = weights.get(key, 0.0) + w
@@ -497,6 +504,7 @@ def report(
             "cost": COST,
             "drift": DRIFT,
             "momentum_months": list(MOMENTUM_MONTHS),
+            "min_uptrends": MIN_UPTRENDS,
             "trend_months": TREND_MONTHS,
             "start": BACKTEST_START.isoformat(),
         },
