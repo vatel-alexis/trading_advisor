@@ -23,6 +23,12 @@ MARKET_TZ = ZoneInfo("America/New_York")
 ACTIVE = (PositionStatus.PENDING, PositionStatus.OPEN)
 TICK, MONITOR, SCREENER = "tick", "monitor", "screener"
 
+# The hosted worker ticks once an hour (app.worker.next_tick_delay). A profile's age limits never
+# go below one interval plus the time to restart the next run, so the gate does not suspend
+# trading between two normal passes.
+MIN_MONITOR_AGE = timedelta(minutes=80)
+MIN_WORKER_AGE = timedelta(minutes=90)
+
 
 def _now() -> datetime:
     return datetime.now(UTC)
@@ -231,6 +237,10 @@ class Gate:
         }
 
 
+def _minutes_value(delta: timedelta) -> int:
+    return int(delta.total_seconds() // 60)
+
+
 def _age(moment: datetime | None, now: datetime) -> timedelta | None:
     return None if moment is None else now - moment
 
@@ -266,36 +276,32 @@ def entry_gate(
 
     last_any = max((b.last_success_at for b in beats.values() if b.last_success_at), default=None)
     worker_age = _age(last_any, now)
-    worker_ok = worker_age is not None and worker_age <= timedelta(
-        minutes=params.max_worker_age_minutes
-    )
+    worker_max = max(timedelta(minutes=params.max_worker_age_minutes), MIN_WORKER_AGE)
+    worker_ok = worker_age is not None and worker_age <= worker_max
     checks.append(
         Check(
             "worker",
             "Worker",
             worker_ok,
             f"Worker : dernier passage réussi {_minutes(worker_age)}"
-            + ("" if worker_ok else f" (max {params.max_worker_age_minutes} min)"),
+            + ("" if worker_ok else f" (max {_minutes_value(worker_max)} min)"),
         )
     )
 
     monitor = beats.get(MONITOR)
     monitor_age = _age(monitor.last_success_at if monitor else None, now)
+    monitor_max = max(timedelta(minutes=params.max_monitor_age_minutes), MIN_MONITOR_AGE)
     failing = bool(
         monitor
         and monitor.last_failure_at
         and (monitor.last_success_at is None or monitor.last_failure_at > monitor.last_success_at)
     )
-    monitor_ok = (
-        not failing
-        and monitor_age is not None
-        and monitor_age <= timedelta(minutes=params.max_monitor_age_minutes)
-    )
+    monitor_ok = not failing and monitor_age is not None and monitor_age <= monitor_max
     detail = f"Moniteur : dernier passage réussi {_minutes(monitor_age)}"
     if failing:
         detail += f", dernier passage en échec ({monitor.last_error})"
     elif not monitor_ok:
-        detail += f" (max {params.max_monitor_age_minutes} min)"
+        detail += f" (max {_minutes_value(monitor_max)} min)"
     checks.append(Check("monitor", "Moniteur des positions", monitor_ok, detail))
 
     run = session.execute(

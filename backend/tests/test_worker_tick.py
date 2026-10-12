@@ -36,11 +36,13 @@ def test_due_jobs(now: datetime, last: date | None, expected: list[str]) -> None
 @pytest.mark.parametrize(
     ("now", "expected"),
     [
-        (at(9, 12), 300.0),
-        (at(17, 58), 300.0),
+        (at(9, 12), 2880.0),
+        (at(10, 0), 1800.0),  # the screener's 10:30 tick
+        (at(10, 30), 1800.0),
+        (at(17, 58), 120.0),
         (at(18, 0), 3600.0),
         (at(7, 15), 2700.0),  # wakes at 08:00 for the first monitor pass
-        (at(11, 40, date(2026, 10, 10)), 1200.0),  # Saturday: backtests only
+        (at(10, 0, date(2026, 10, 10)), 3600.0),  # Saturday: no screener
     ],
 )
 def test_next_tick_delay(now: datetime, expected: float) -> None:
@@ -60,6 +62,6 @@ def test_loop_stops_within_its_budget() -> None:
             raise RuntimeError("a crashed tick does not end the loop")
         return True
 
-    count = loop(timedelta(minutes=60), clock=lambda: clock[0], sleep=sleep, run=run)
-    assert count == len(ticks) == 13
-    assert ticks[0] == at(9, 0) and ticks[-1] == at(10, 0)
+    count = loop(timedelta(minutes=150), clock=lambda: clock[0], sleep=sleep, run=run)
+    assert count == len(ticks) == 4
+    assert ticks == [at(9, 0), at(10, 0), at(10, 30), at(11, 0)]

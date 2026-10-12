@@ -20,9 +20,10 @@ fait ce qui est dû à ce moment-là :
 
 GitHub saute la plupart des tâches planifiées (une douzaine de passages en deux jours au lieu
 de plusieurs centaines). Le workflow ne compte donc pas sur elles : chaque exécution lance
-`python -m app.worker loop`, qui passe toutes les 5 minutes de 8 h 00 à 17 h 55 à New York en
-semaine et toutes les heures le reste du temps, pendant 5 h 30, puis démarre elle-même
-l'exécution suivante. Hors séance, un backtest lancé depuis le site démarre donc dans l'heure.
+`python -m app.worker loop`, qui passe toutes les heures (de 8 h 00 à 17 h 00 à New York en
+semaine pour le moniteur, plus 10 h 30 pour le screener), pendant 5 h 30, puis démarre
+elle-même l'exécution suivante. Le passage était toutes les 5 minutes jusqu'au 12/10/2026 ;
+l'horaire économise le calcul gratuit de Neon. Hors séance, un backtest lancé depuis le site démarre donc dans l'heure.
 La tâche planifiée horaire ne sert qu'à relancer la chaîne si elle s'arrête. Pour la démarrer
 tout de suite : *Actions → Worker → Run workflow* avec `loop`.
 
@@ -108,13 +109,16 @@ des colonnes absentes et le site affiche « API injoignable ». Pour la rejouer 
 
 ## Limites à connaître
 
-- **Retards.** Entre deux exécutions de la chaîne, le moniteur s'interrompt une à deux
-  minutes (installation). Les stops sont vérifiés toutes les 5 minutes, et non à la minute près.
+- **Retards.** Le moniteur passe une fois par heure : un stop (confirmé sur
+  `stop_confirmations` relevés de suite, 2 par défaut) part une à deux heures après le
+  franchissement, et un ordre limite progressif avance d'un palier par passage. La prise de
+  profit, ordre GTC chez Alpaca, n'attend pas. Pour des stops plus rapides : mettre
+  « Relevés consécutifs pour confirmer le stop » à 1 dans les Réglages.
 - **60 jours.** GitHub désactive les tâches planifiées d'un dépôt public sans aucune activité
   (commit, PR...) pendant 60 jours. Il prévient par e-mail, et un clic sur *Enable workflow*
   les relance.
-- **Neon gratuit.** 0,5 Go de stockage et 100 heures de calcul par mois. Avec la base réveillée
-  environ 10 h par jour de séance, on en consomme à peu près 60.
+- **Neon gratuit.** 0,5 Go de stockage et 100 heures de calcul par mois. Avec un passage par
+  heure et la base qui s'endort entre deux, on en consomme environ 20.
 - **Premier affichage lent.** La base Neon s'endort après 5 minutes sans requête, et l'API
   Vercel aussi : la première page après une pause peut mettre quelques secondes.
 - **Backtests longs.** Un seul passage du worker tourne à la fois : pendant un backtest (une à

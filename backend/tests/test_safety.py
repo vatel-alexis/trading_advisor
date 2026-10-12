@@ -61,8 +61,11 @@ def test_a_stale_monitor_or_a_failing_one_blocks_entries(session: Session) -> No
     broker = FakeBroker()
     deal = spread(session)
     healthy(session, broker, deal.id)
-    session.get(JobHeartbeat, MONITOR).last_success_at = NOW - timedelta(minutes=45)
-    assert "max 30 min" in blocked(session, broker, deal.id)
+    # Within the hourly worker's interval: still allowed, whatever the profile's 30 minutes.
+    session.get(JobHeartbeat, MONITOR).last_success_at = NOW - timedelta(minutes=70)
+    assert entry_gate(session, PARAMS, 20_000, market_open=True).allowed
+    session.get(JobHeartbeat, MONITOR).last_success_at = NOW - timedelta(minutes=95)
+    assert "max 80 min" in blocked(session, broker, deal.id)
 
     record_job(session, MONITOR, ok=True)
     record_job(session, MONITOR, ok=False, error="étapes en échec : orders")
