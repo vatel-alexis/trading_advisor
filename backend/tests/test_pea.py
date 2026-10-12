@@ -47,12 +47,22 @@ def test_rotation_keeps_the_best_rising_etfs() -> None:
 
 
 def test_a_falling_etf_is_replaced_by_the_money_market() -> None:
-    # Only two ETFs rise: the third slot of the rotation goes to the money market.
+    # Four ETFs rise; Japan, third best, drops under its 10-month average in the last month.
+    days, index = monthly_index(nasdaq=0.03, sp500=0.02, japan=0.01, emerging=0.005, europe=-0.03)
+    index["japan"][-1] = index["japan"][-2] * 0.8  # still ranked, now under its average
+    ranked = {s.key: s for s in pea.scores(index, list(range(len(days))))}
+    assert not ranked["japan"].trend_ok
+    target = latest_target("moyen", days, index)
+    assert target["nasdaq"] == pytest.approx(1 / 3) and target["sp500"] == pytest.approx(1 / 3)
+    assert "japan" not in target
+
+
+def test_a_broad_fall_sends_the_whole_rotation_to_the_money_market() -> None:
+    # Only two ETFs rise: fewer than three uptrends, so even those two are sold.
     days, index = monthly_index(nasdaq=0.03, sp500=0.01, emerging=-0.01, japan=-0.02, europe=-0.03)
-    assert latest_target("moyen", days, index) == pytest.approx(
-        {"nasdaq": 1 / 3, "sp500": 1 / 3, "cash": 1 / 3}
-    )
-    # Everything falls: all in the money market.
+    assert latest_target("moyen", days, index) == {"cash": 1.0}
+    assert latest_target("securite", days, index) == {"cash": 1.0}
+    # Everything falls: all in the money market too.
     days, index = monthly_index(
         nasdaq=-0.01, sp500=-0.01, emerging=-0.01, japan=-0.02, europe=-0.03
     )
@@ -97,8 +107,8 @@ def test_proxies_in_euros_extend_the_pea_etfs() -> None:
 
 
 def synthetic_history() -> tuple[list[date], dict[str, list[float]]]:
-    """2005-2026 business days: the Nasdaq rises steadily, the others fall, then the Nasdaq
-    falls and Japan rises from 2020."""
+    """2005-2026 business days: the Nasdaq leads the S&P 500 and Europe up, then from 2020 the
+    Nasdaq falls and Japan takes the lead."""
     days = business_days(date(2005, 1, 3), TODAY)
     index: dict[str, list[float]] = {k: [] for k in pea.ASSET_BY_KEY}
     values = dict.fromkeys(pea.ASSET_BY_KEY, 100.0)
@@ -107,8 +117,8 @@ def synthetic_history() -> tuple[list[date], dict[str, list[float]]]:
         daily = {
             "nasdaq": -0.0008 if late else 0.0006,
             "japan": 0.0008 if late else -0.0003,
-            "sp500": -0.0002,
-            "europe": -0.0003,
+            "sp500": 0.0004,
+            "europe": 0.0002,
             "emerging": -0.0004,
             pea.CASH: 0.00005,
         }
@@ -124,7 +134,7 @@ def test_backtest_trades_the_day_after_the_signal_and_counts_adjustments() -> No
 
     first = bt.adjustments[0]
     assert first.signal_day == date(2006, 12, 29) and first.day == date(2007, 1, 2)
-    assert first.after == pytest.approx({"nasdaq": 0.5, "cash": 0.5})
+    assert first.after == pytest.approx({"nasdaq": 0.5, "sp500": 0.5})
     signals = [a for a in bt.adjustments[1:] if a.reason == "signal"]
     # The Nasdaq leaves, then Japan comes in: only a few real changes over 20 years.
     assert 1 <= len(signals) <= 6
@@ -158,7 +168,7 @@ def test_report_gives_targets_changes_and_a_provisional_signal() -> None:
     by_key = {lv["key"]: lv for lv in report["levels"]}
     assert set(by_key) == {"securite", "moyen", "dynamique"}
     dyn = by_key["dynamique"]
-    assert dyn["target"] == pytest.approx({"japan": 0.5, "cash": 0.5})
+    assert dyn["target"] == pytest.approx({"japan": 0.5, "sp500": 0.5})
     assert dyn["changes"] == [] and dyn["preview_changes"] == []
     assert sum(by_key["securite"]["target"].values()) == pytest.approx(1.0)
     assert set(dyn["summary"]["periods"]) == {"1", "3", "5", "10", "15"}

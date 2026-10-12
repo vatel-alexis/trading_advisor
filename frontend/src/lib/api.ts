@@ -345,7 +345,15 @@ export type PeaReport = {
   levels: PeaLevel[];
   benchmark: PeaSummary & { label: string };
   benchmark_curve: PeaPoint[];
-  assumptions: { cost: number; drift: number; momentum_months: number[]; trend_months: number; start: string };
+  assumptions: {
+    cost: number;
+    drift: number;
+    momentum_months: number[];
+    trend_months: number;
+    // Absent from reports computed before the rule existed.
+    min_uptrends?: number;
+    start: string;
+  };
 };
 export type Pea = { report: PeaReport | null; computed_at: string | null };
 export type PeaAlert = {
