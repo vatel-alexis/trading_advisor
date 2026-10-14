@@ -6,26 +6,45 @@ par niveau de risque, avec alerte d'ajustement. Propositions uniquement : aucun 
 ## Règle
 
 - Univers : Amundi PEA S&P 500 (PSP5), Nasdaq-100 (PUST), MSCI Europe (PCEU), Émergents ESG (PAEEM),
-  Japon Topix (PTPXE) ; repli sur Amundi PEA Euro Court Terme (OBLI, monétaire €STR).
+  Japon Topix (PTPXE), iShares MSCI World Swap PEA (WPEA) ; repli sur Amundi PEA Euro Court Terme (OBLI, monétaire €STR).
   Le PEA n'accepte ni or ni obligations : le monétaire est le seul actif défensif.
 - Le dernier jour de bourse du mois : score = moyenne des performances 3, 6 et 12 mois de chaque ETF actions.
   Un niveau garde ses N meilleurs ; un ETF n'est acheté que si son score est positif et son cours au-dessus de
   sa moyenne 10 mois, sinon sa part va au monétaire.
-- « Canari » : si moins de 3 des 5 ETF actions sont en tendance haussière (score positif et cours au-dessus de
+- « Canari » : si moins de 3 des 5 ETF régionaux (tous sauf Monde) sont en tendance haussière (score positif et cours au-dessus de
   la moyenne 10 mois), la baisse est jugée générale et toute la partie rotation passe en monétaire.
 - Niveaux : Sécurité = 60 % rotation (3 meilleurs) + 40 % monétaire ; Moyen = rotation 3 meilleurs ;
   Dynamique = rotation 2 meilleurs.
 - Exécution au cours de clôture suivant le signal ; rééquilibrage aussi quand une ligne s'écarte de plus de
   5 points de sa cible ; coût 0,3 % par euro acheté ou vendu.
 
-## Résultats (janvier 2007 → 6 octobre 2026, par an)
+## Résultats (janvier 2007 → octobre 2026, par an)
 
 | Niveau | 1 an | 3 ans | 5 ans | 10 ans | 15 ans | Depuis 2007 | Baisse max | Pire année | Ajust./an |
 |---|---|---|---|---|---|---|---|---|---|
-| Sécurité | +16,5 % | +12,0 % | +8,0 % | +7,1 % | +6,8 % | +6,5 % | 13 % | 2022 -6,6 % | 4,1 |
-| Moyen | +26,6 % | +18,4 % | +11,9 % | +11,5 % | +11,0 % | +10,4 % | 20 % | 2022 -10,3 % | 4,1 |
-| Dynamique | +26,4 % | +21,2 % | +13,7 % | +12,7 % | +11,1 % | +10,6 % | 20 % | 2022 -12,1 % | 3,9 |
-| S&P 500 conservé | +21,9 % | +20,9 % | +14,5 % | +15,2 % | +16,7 % | +11,8 % | 51 % | 2008 -34,0 % | 0,0 |
+| Sécurité | +17,3 % | +12,8 % | +8,3 % | +7,7 % | +6,8 % | +6,5 % | 12 % | 2022 -7,1 % | 4,4 |
+| Moyen | +28,1 % | +19,8 % | +12,4 % | +12,4 % | +11,1 % | +10,4 % | 20 % | 2022 -11,2 % | 4,4 |
+| Dynamique | +28,2 % | +19,9 % | +12,9 % | +12,7 % | +11,1 % | +10,6 % | 20 % | 2022 -11,5 % | 4,2 |
+| S&P 500 conservé | +22,7 % | +19,9 % | +14,0 % | +15,2 % | +16,5 % | +11,7 % | 51 % | 2008 -34,0 % | 0,0 |
+
+## Ajout du MSCI World (2026-10-14)
+
+Demandé par Alexis. Historique : URTH (iShares MSCI World, en dollars converti en euros) avant WPEA, corrélation
+mensuelle 0,97 avec WPEA et avec l'Amundi MSCI World CW8. URTH ne commence qu'en 2012 : le Monde entre dans la
+rotation en 2013 (un mélange 60 % SPY + 40 % EFA avant 2012 donne les mêmes résultats).
+
+Mesuré sur les mêmes données (par an depuis 2007 / 10 ans / 2022) :
+
+| Variante | Sécurité | Moyen | Dynamique |
+|---|---|---|---|
+| 5 ETF (avant) | 6,5 % / 7,2 % / -6,6 % | 10,4 % / 11,6 % / -10,3 % | 10,6 % / 12,8 % / -12,1 % |
+| + Monde, canari 3 sur 6 | 6,5 % / 6,8 % / -10,9 % | 10,2 % / 10,9 % / -17,2 % | 10,3 % / 11,1 % / -18,4 % |
+| + Monde, canari 4 sur 6 | 5,7 % / 6,4 % / -7,1 % | 9,1 % / 10,3 % / -11,2 % | 9,0 % / 10,5 % / -11,5 % |
+| **+ Monde hors canari (retenu)** | 6,5 % / 7,7 % / -7,1 % | 10,4 % / 12,4 % / -11,2 % | 10,6 % / 12,7 % / -11,5 % |
+
+Le Monde est à 70 % américain : compté dans le canari, il monte avec le S&P 500 et retarde la sortie (2022
+presque deux fois pire). Laissé hors canari, il est un simple candidat de la rotation : effet neutre
+(baisse max identique), il est choisi environ 8 % du temps en Moyen.
 
 ## Variantes testées (2026-10-12)
 
