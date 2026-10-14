@@ -69,6 +69,14 @@ def test_a_broad_fall_sends_the_whole_rotation_to_the_money_market() -> None:
     assert latest_target("dynamique", days, index) == {"cash": 1.0}
 
 
+def test_msci_world_is_a_candidate_but_not_counted_by_the_canary() -> None:
+    days, index = monthly_index(world=0.02, nasdaq=0.03, sp500=0.01, emerging=0.005, europe=-0.01)
+    assert latest_target("dynamique", days, index) == pytest.approx({"nasdaq": 0.5, "world": 0.5})
+    # World rises with the S&P 500: it does not make a third uptrend for the canary.
+    days, index = monthly_index(world=0.02, nasdaq=0.03, sp500=0.01, emerging=-0.01, europe=-0.03)
+    assert latest_target("moyen", days, index) == {"cash": 1.0}
+
+
 def test_a_rising_score_below_its_average_stays_out() -> None:
     days, index = monthly_index(nasdaq=0.03, sp500=0.02, emerging=0.01)
     # Nasdaq fell hard over the last month: still up over 12 months, but under its 10-month
@@ -120,6 +128,7 @@ def synthetic_history() -> tuple[list[date], dict[str, list[float]]]:
             "sp500": 0.0004,
             "europe": 0.0002,
             "emerging": -0.0004,
+            "world": 0.0003,
             pea.CASH: 0.00005,
         }
         for k in values:

@@ -3,13 +3,14 @@
 Each month-end, every equity ETF gets a momentum score (mean of its 3, 6 and 12-month
 returns). A level keeps its `top` best ETFs; one of them is only held while its trend is up
 (score > 0 and price above its 10-month average), otherwise its share goes to the euro money
-market ETF. When fewer than MIN_UPTRENDS ETFs are in an uptrend, the whole rotation goes to the
-money market. The new target is traded at the next day's close.
+market ETF. When fewer than MIN_UPTRENDS of the five regional ETFs are in an uptrend, the whole
+rotation goes to the money market. The new target is traded at the next day's close.
 
 History: the PEA ETFs are recent (2016-2019), so each one is extended back with the US ETF on
 the same index converted to euros (monthly correlation 0.97-0.99 over the overlap, see
-docs/pea.md). The money market ETF only tracks €STR since 2024-10; before, a yearly euro
-short rate table stands in for it.
+docs/pea.md); MSCI World's proxy only starts in 2012, so it joins the rotation in 2013. The
+money market ETF only tracks €STR since 2024-10; before, a yearly euro short rate table stands
+in for it.
 
 Standard library only: the worker computes the report, the API only reads it.
 """
@@ -31,6 +32,9 @@ class Asset:
     isin: str | None
     proxy: str | None  # US ETF on the same index, priced in dollars
     since: date  # first day the PEA ETF's own prices are used
+    # Counted by the canary. MSCI World is ~70 % US: counting it too would make the breadth
+    # test weaker (it moves with the S&P 500) and doubled the 2022 loss in the backtest.
+    canary: bool = True
 
 
 ASSETS: tuple[Asset, ...] = (
@@ -80,6 +84,16 @@ ASSETS: tuple[Asset, ...] = (
         date(2019, 5, 1),
     ),
     Asset(
+        "world",
+        "Monde",
+        "iShares MSCI World Swap PEA UCITS ETF",
+        "WPEA.PA",
+        "IE0002XZSHO1",
+        "URTH",
+        date(2024, 4, 1),
+        canary=False,
+    ),
+    Asset(
         CASH,
         "Monétaire",
         "Amundi PEA Euro Court Terme UCITS ETF",
@@ -91,6 +105,7 @@ ASSETS: tuple[Asset, ...] = (
 )
 ASSET_BY_KEY = {a.key: a for a in ASSETS}
 EQUITIES = tuple(a.key for a in ASSETS if a.key != CASH)
+CANARY = frozenset(a.key for a in ASSETS if a.key != CASH and a.canary)
 FX_TICKER = "EURUSD=X"  # dollars per euro
 
 # Yearly mean of the euro overnight rate (EONIA, then €STR), in %, before the money market ETF
@@ -108,8 +123,8 @@ TRADING_DAYS = 252
 # backtest (docs/pea.md).
 MOMENTUM_MONTHS = (3, 6, 12)
 TREND_MONTHS = 10
-# "Canary": when fewer equity ETFs than this are in an uptrend, the fall is broad and the whole
-# rotation goes to the money market, even the ETFs still rising.
+# "Canary": when fewer of the CANARY equity ETFs than this are in an uptrend, the fall is broad
+# and the whole rotation goes to the money market, even the ETFs still rising.
 MIN_UPTRENDS = 3
 # Brokerage and spread, per euro bought or sold (Boursorama ~0.5 % on sales, buys often free).
 COST = 0.003
@@ -241,7 +256,7 @@ def target(level: Level, ranked: Sequence[Score]) -> dict[str, float]:
     """Target weights of a level from the month's scores (keys with weight > 0 only)."""
     weights: dict[str, float] = {}
     usable = sorted((s for s in ranked if s.momentum is not None), key=lambda s: -s.momentum)
-    broad_fall = sum(s.trend_ok for s in usable) < MIN_UPTRENDS
+    broad_fall = sum(s.trend_ok for s in usable if s.key in CANARY) < MIN_UPTRENDS
     slot = level.rotation / level.top
     for i in range(level.top):
         pick = usable[i] if i < len(usable) else None
